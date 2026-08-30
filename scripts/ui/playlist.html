@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Playlist — Spotify Playlist Tools</title>
+  <link rel="stylesheet" href="/shared.css">
+</head>
+<body>
+  <div id="headerContainer"></div>
+
+  <div class="main">
+    <div id="content">
+      <div class="loading"><span class="spinner"></span> Loading playlist...</div>
+    </div>
+  </div>
+
+  <!-- Duplicates modal -->
+  <div class="modal-overlay" id="duplicatesModal">
+    <div class="modal">
+      <h3>Duplicates Detected</h3>
+      <p id="duplicatesModalText"></p>
+      <label style="display:inline-flex; align-items:center; gap:6px; margin-bottom:16px; font-size:13px; color:#888; cursor:pointer; line-height:1;">
+        <input type="checkbox" id="duplicatesIncludeCheckbox" style="accent-color:#1DB954; width:14px; height:14px; flex-shrink:0; margin:0;"> Include duplicates anyway
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('duplicatesModal')">Cancel</button>
+        <button class="btn btn-primary" id="duplicatesConfirmBtn">Add Tracks</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/shared.js"></script>
+  <script>
+    const playlistId = window.location.pathname.split('/playlist/')[1];
+    let tracks = [];
+    let playlists = [];
+    let isOwned = true;
+    const _p = getUrlParams();
+    let sortField = _p.sort || 'added_at';
+    let sortDir = _p.dir || 'desc';
+    let selectedTrackUris = new Map();
+    let playlistName = '';
+    let showXref = _p.xref === '1';
+    let showGenres = _p.genres === '1';
+    let selectedGenreFilters = new Set(_p.gf ? _p.gf.split(',').filter(Boolean) : []);
+    let genreDropdownOpen = false;
+    let genreFilterInverted = _p.gfx === '1';
+    const _initialFilter = _p.filter || '';
+
+    function syncUrl(debounce = 0) {
+      persistParams({
+        filter: document.getElementById('detailFilterInput')?.value ?? _initialFilter,
+        sort: sortField !== 'added_at' ? sortField : '',
+        dir: sortDir !== 'desc' ? sortDir : '',
+        xref: showXref ? '1' : '',
+        genres: showGenres ? '1' : '',
+        gf: showGenres ? [...selectedGenreFilters] : [],
+        gfx: (showGenres && genreFilterInverted) ? '1' : '',
+      }, { debounce });
+    }
+
+    async function init() {
+      document.getElementById('headerContainer').innerHTML = getHeaderHtml('playlists');
+      // Load playlists for the target dropdown
+      const plData = await api('/api/playlists');
+      playlists = plData.playlists;
+      _cacheTimestamp = plData.cached_at;
+      updateHeaderAgo();
+      if (_cacheInterval) clearInterval(_cacheInterval);
+      _cacheInterval = setInterval(updateHeaderAgo, 30000);
+      isOwned = playlists.find(p => p.id === playlistId)?.isOwned !== false;
+      playlistName = playlists.find(p => p.id === playlistId)?.name || '';
+      await loadTracks();
+    }
+
+    async function loadTracks() {
+      try {
+        const params = [];
+        if (showXref) params.push('xref=1');
+        if (showGenres) params.push('genres=1');
+        const queryStr = params.length > 0 ? '?' + params.join('&') : '';
+        const data = await api(`/api/playlist/${playlistId}/tracks${queryStr}`);
+        tracks = data.tracks.map((t, i) => ({ ...t, _index: i }));
+        playlistName = data.name;
+        document.title = `${playlistName} — Spotify Playlist Tools`;
+        render();
+      } catch (err) {
+        document.getElementById('content').innerHTML = `<div class="loading" style="color:#e74c3c">${err.message}</div>`;
+      }
+    }
+
+    function render() {
+      const rawFilter = document.getElementById('detailFilterInput')?.value ?? _initialFilter;
+      const filterText = rawFilter.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const filtered = filterText
+        ? tracks.filter(t => t.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(filterText) || t.artist.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(filterText))
+        : tracks;
+
+      // Apply genre filter
+      const genreFiltered = (showGenres && selectedGenreFilters.size > 0)
+        ? (genreFilterInverted
+          ? filtered.filter(t => !(t.genres || []).some(g => selectedGenreFilters.has(g)))
+          : filtered.filter(t => (t.genres || []).some(g => selectedGenreFilters.has(g))))
+        : filtered;
+
+      const sorted = [...genreFiltered].sort((a, b) => {
+        let cmp = 0;
+        if (sortField === 'name') cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        else if (sortField === 'artist') cmp = a.artist.toLowerCase().localeCompare(b.artist.toLowerCase());
+        else if (sortField === 'album') cmp = (a.album || '').toLowerCase().localeCompare((b.album || '').toLowerCase());
+        else if (sortField === 'duration_ms') cmp = (a.duration_ms || 0) - (b.duration_ms || 0);
+        else if (sortField === 'popularity') cmp = (a.popularity || 0) - (b.popularity || 0);
+        else if (sortField === 'added_at') cmp = (a.added_at || '').localeCompare(b.added_at || '');
+        else if (sortField === 'release_date') cmp = (a.release_date || '').localeCompare(b.release_date || '');
+        else if (sortField === 'index') cmp = (a._index || 0) - (b._index || 0);
+        else if (sortField === 'alsoIn') cmp = (a.alsoIn || []).length - (b.alsoIn || []).length;
+        return sortDir === 'asc' ? cmp : -cmp;
+      });
+
+      const totalMs = tracks.reduce((s, t) => s + (t.duration_ms || 0), 0);
+      const explicitCount = tracks.filter(t => t.explicit).length;
+      const avgPop = tracks.length > 0 ? Math.round(tracks.reduce((s, t) => s + (t.popularity || 0), 0) / tracks.length) : 0;
+      const popThresholdVal = document.getElementById('popThreshold')?.value || '50';
+
+      function arrow(field) {
+        if (sortField !== field) return '';
+        return sortDir === 'asc' ? ' &#9650;' : ' &#9660;';
+      }
+
+      const ownedPlaylists = playlists.filter(p => p.isOwned !== false).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+      const targetOptions = ownedPlaylists.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
+      const savedTarget = sessionStorage.getItem('detailTargetPlaylist') || '';
+
+      const rows = sorted.map((t, i) => {
+        const checked = selectedTrackUris.has(t.uri) ? 'checked' : '';
+        return `
+        <tr>
+          <td><input type="checkbox" ${checked} onchange="toggleTrack('${t.uri}', '${escAttr(t.name)}', '${escAttr(t.artist)}', this.checked)"></td>
+          <td style="color:#888">${i + 1}</td>
+          <td>${escHtml(t.name)}${t.explicit ? '<span class="explicit-badge">E</span>' : ''}<button class="queue-btn" onclick="queueTrack('${t.uri}', this)">+ Queue</button></td>
+          <td>${escHtml(t.artist)}</td>
+          <td style="color:#888; font-size:12px">${escHtml(t.album)}</td>
+          <td style="text-align:center; color:#888">${formatTrackDuration(t.duration_ms)}</td>
+          <td style="text-align:center; color:#888">${t.popularity || '-'}</td>
+          <td style="color:#888; font-size:12px">${t.release_date || '-'}</td>
+          <td style="color:#888; font-size:12px">${formatDate(t.added_at)}</td>
+          ${showXref ? `<td style="color:#888; font-size:12px">${(t.alsoIn || []).join(', ')}</td>` : ''}
+          ${showGenres ? `<td style="font-size:11px">${(t.genres || []).map(g => '<a href="/genre/' + encodeURIComponent(g) + '" class="artist-chip" style="font-size:10px;padding:1px 6px;">' + escHtml(g) + '</a>').join(' ')}</td>` : ''}
+          <td>${isOwned ? `<button class="btn-icon" title="Remove" onclick="removeSingleTrack('${t.uri}', '${escAttr(t.name)}')">&#128465;</button>` : ''}</td>
+        </tr>`;
+      }).join('');
+
+      const allChecked = sorted.length > 0 && sorted.every(t => selectedTrackUris.has(t.uri));
+
+      document.getElementById('content').innerHTML = `
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+          <button class="btn btn-secondary btn-small" onclick="history.back()">&#8592; Back</button>
+          <h2 style="color:#1DB954; font-size:20px; flex:1;">${escHtml(playlistName)}</h2>
+          ${isOwned ? `<select class="sort-select" onchange="serverSort(this.value); this.selectedIndex=0;">
+            <option value="">Sort on Spotify...</option>
+            <option value="shuffle">Shuffle</option>
+            <option value="title">By Title</option>
+            <option value="artist">By Artist</option>
+            <option value="date-added">Date Added (new)</option>
+            <option value="date-added-asc">Date Added (old)</option>
+            <option value="release-date">Release Date (old)</option>
+            <option value="release-date-desc">Release Date (new)</option>
+            <option value="popularity">Popularity (high)</option>
+            <option value="popularity-asc">Popularity (low)</option>
+          </select>
+          <button class="btn-icon" title="Rename" onclick="renamePlaylist()">&#9998;</button>` : ''}
+          <button class="btn-icon" title="Delete" onclick="deletePlaylist()">&#128465;</button>
+        </div>
+        <div class="detail-stats">
+          <div class="detail-stat"><div class="value">${tracks.length}</div><div class="label">Tracks</div></div>
+          <div class="detail-stat"><div class="value">${formatDuration(totalMs)}</div><div class="label">Duration</div></div>
+          <div class="detail-stat"><div class="value">${avgPop}</div><div class="label">Avg Popularity</div></div>
+          <div class="detail-stat"><div class="value">${explicitCount}</div><div class="label">Explicit</div></div>
+        </div>
+        <div style="display:flex; gap:12px; align-items:center; margin-bottom:12px;">
+          <input type="text" id="detailFilterInput" placeholder="Filter tracks..." oninput="onFilterInput()" value="${escHtml(rawFilter)}" class="search-input" style="width:300px;">
+          <button class="btn btn-secondary btn-small" onclick="toggleXref()" style="${showXref ? 'background:#1DB95433;color:#1DB954;' : ''}">${showXref ? '✓ Cross-refs' : 'Show cross-refs'}</button>
+          <button class="btn btn-secondary btn-small" onclick="toggleGenres()" style="${showGenres ? 'background:#1DB95433;color:#1DB954;' : ''}">${showGenres ? '✓ Genres' : 'Show genres'}</button>
+          ${showGenres ? `<div id="genreFilterContainer" style="position:relative; display:inline-block;">
+            <button class="sort-select" style="padding:4px 8px; cursor:pointer; font-size:12px;" onclick="toggleGenreDropdown()" id="genreFilterBtn">${selectedGenreFilters.size === 0 ? 'Filter genres...' : selectedGenreFilters.size + ' genre(s)'}</button>
+            <div id="genreDropdown" style="display:${genreDropdownOpen ? 'block' : 'none'}; position:absolute; top:100%; left:0; width:250px; max-height:250px; overflow-y:auto; background:#252525; border:1px solid #333; border-radius:6px; z-index:50; margin-top:4px; padding:4px 0;">
+            </div>
+          </div>` : ''}
+        </div>
+        <div class="action-bar" style="margin-bottom:12px;">
+          <select id="targetPlaylist" class="sort-select" style="width:220px; padding:6px 10px; font-size:13px;" onchange="sessionStorage.setItem('detailTargetPlaylist', this.value)">
+            <option value="">Select target playlist...</option>
+            ${targetOptions}
+          </select>
+          <span id="selectedCount">${selectedTrackUris.size} selected</span>
+          <button class="btn btn-primary btn-small" onclick="addToPlaylist()">Add to Playlist</button>
+          ${isOwned ? `<button class="btn btn-primary btn-small" style="background:#f39c12;color:#000;" onclick="moveToPlaylist()">Move to Playlist</button>
+          <button class="btn btn-danger btn-small" onclick="removeSelected()">Remove Selected</button>` : ''}
+          <button class="btn btn-secondary btn-small" onclick="clearSelection()">Clear</button>
+          <span style="margin-left:12px; display:inline-flex; align-items:center; gap:4px;">
+            <input type="number" id="popThreshold" value="${popThresholdVal}" min="0" max="100" style="width:50px; padding:4px 6px; border:1px solid #333; border-radius:4px; background:#252525; color:#e0e0e0; font-size:12px;">
+            <button class="btn btn-secondary btn-small" onclick="selectByPop('above')">Select above</button>
+            <button class="btn btn-secondary btn-small" onclick="selectByPop('below')">Select below</button>
+          </span>
+        </div>
+        <table class="data-table">
+          <thead><tr>
+            <th style="width:40px"><input type="checkbox" ${allChecked ? 'checked' : ''} onchange="toggleAllTracks(this.checked)"></th>
+            <th style="width:40px; cursor:pointer" onclick="sort('index')">#${arrow('index')}</th>
+            <th class="sortable" onclick="sort('name')">Title${arrow('name')}</th>
+            <th class="sortable" onclick="sort('artist')">Artist${arrow('artist')}</th>
+            <th class="sortable" onclick="sort('album')">Album${arrow('album')}</th>
+            <th class="sortable" style="text-align:center" onclick="sort('duration_ms')">Dur${arrow('duration_ms')}</th>
+            <th class="sortable" style="text-align:center" onclick="sort('popularity')">Pop${arrow('popularity')}</th>
+            <th class="sortable" onclick="sort('release_date')">Released${arrow('release_date')}</th>
+            <th class="sortable" onclick="sort('added_at')">Added${arrow('added_at')}</th>
+            ${showXref ? '<th class="sortable" onclick="sort(\'alsoIn\')">Also in' + arrow('alsoIn') + '</th>' : ''}
+            ${showGenres ? '<th>Genres</th>' : ''}
+            <th style="width:40px"></th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+
+      // Restore target playlist selection
+      if (savedTarget) document.getElementById('targetPlaylist').value = savedTarget;
+      // Refocus filter
+      const filterEl = document.getElementById('detailFilterInput');
+      if (filterEl && document.activeElement !== filterEl) { filterEl.focus(); filterEl.setSelectionRange(filterEl.value.length, filterEl.value.length); }
+
+      // Populate genre filter dropdown if genres are shown
+      if (showGenres) {
+        const allGenres = [...new Set(tracks.flatMap(t => t.genres || []))].sort();
+        const dropdown = document.getElementById('genreDropdown');
+        if (dropdown) {
+          dropdown.innerHTML = `<div style="padding:4px 12px; border-bottom:1px solid #333; margin-bottom:4px; display:flex; gap:4px;">
+            <button class="btn btn-secondary btn-small" style="flex:1; font-size:11px;" onclick="clearGenreFilter()">Clear All</button>
+            <button class="btn btn-secondary btn-small" style="flex:1; font-size:11px; ${genreFilterInverted ? 'background:#e74c3c33;color:#e74c3c;' : ''}" onclick="toggleGenreInvert()">Exclude</button>
+          </div>` + allGenres.map(g => `
+            <label style="display:flex; align-items:center; gap:8px; padding:3px 12px; cursor:pointer; font-size:12px; color:#e0e0e0;" onmouseover="this.style.background='#333'" onmouseout="this.style.background=''">
+              <input type="checkbox" value="${escHtml(g)}" ${selectedGenreFilters.has(g) ? 'checked' : ''} onchange="updateGenreFilter()" style="accent-color:#1DB954; width:14px; height:14px; flex-shrink:0;">
+              ${escHtml(g)}
+            </label>
+          `).join('');
+        }
+      }
+    }
+
+    function sort(field) {
+      if (sortField === field) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      else { sortField = field; sortDir = (field === 'popularity' || field === 'added_at' || field === 'duration_ms' || field === 'alsoIn') ? 'desc' : 'asc'; }
+      syncUrl();
+      render();
+    }
+
+    function onFilterInput() {
+      render();
+      syncUrl(400);
+    }
+
+    async function toggleXref() {
+      showXref = !showXref;
+      syncUrl();
+      await loadTracks();
+    }
+
+    async function toggleGenres() {
+      showGenres = !showGenres;
+      if (!showGenres) selectedGenreFilters.clear();
+      syncUrl();
+      await loadTracks();
+    }
+
+    function toggleGenreDropdown() {
+      genreDropdownOpen = !genreDropdownOpen;
+      const dropdown = document.getElementById('genreDropdown');
+      if (dropdown) dropdown.style.display = genreDropdownOpen ? 'block' : 'none';
+    }
+
+    function getSelectedGenres() {
+      const checkboxes = document.querySelectorAll('#genreDropdown input[type="checkbox"]:checked');
+      return [...checkboxes].map(cb => cb.value);
+    }
+
+    function updateGenreFilter() {
+      const dropdown = document.getElementById('genreDropdown');
+      const scrollPos = dropdown ? dropdown.scrollTop : 0;
+
+      selectedGenreFilters = new Set(getSelectedGenres());
+      const btn = document.getElementById('genreFilterBtn');
+      if (btn) {
+        const prefix = genreFilterInverted ? 'Excluding ' : '';
+        if (selectedGenreFilters.size === 0) btn.textContent = 'Filter genres...';
+        else btn.textContent = `${prefix}${selectedGenreFilters.size} genre(s)`;
+      }
+      syncUrl();
+      render();
+
+      const newDropdown = document.getElementById('genreDropdown');
+      if (newDropdown) newDropdown.scrollTop = scrollPos;
+    }
+
+    function clearGenreFilter() {
+      selectedGenreFilters.clear();
+      genreFilterInverted = false;
+      genreDropdownOpen = false;
+      document.querySelectorAll('#genreDropdown input[type="checkbox"]').forEach(cb => cb.checked = false);
+      updateGenreFilter();
+    }
+
+    function toggleGenreInvert() {
+      genreFilterInverted = !genreFilterInverted;
+      genreDropdownOpen = true;
+      updateGenreFilter();
+    }
+
+    // Close genre dropdown when clicking outside
+    document.addEventListener('mousedown', (e) => {
+      if (!genreDropdownOpen) return;
+      const container = document.getElementById('genreFilterContainer');
+      if (container && !container.contains(e.target)) {
+        genreDropdownOpen = false;
+        const dropdown = document.getElementById('genreDropdown');
+        if (dropdown) dropdown.style.display = 'none';
+      }
+    });
+
+    // Track selection
+    function toggleTrack(uri, name, artist, checked) {
+      if (checked) selectedTrackUris.set(uri, { name, artist }); else selectedTrackUris.delete(uri);
+      document.getElementById('selectedCount').textContent = `${selectedTrackUris.size} selected`;
+    }
+    function toggleAllTracks(checked) {
+      const filterText = (document.getElementById('detailFilterInput')?.value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      let visible = filterText
+        ? tracks.filter(t => t.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(filterText) || t.artist.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(filterText))
+        : tracks;
+      if (showGenres && selectedGenreFilters.size > 0) {
+        visible = genreFilterInverted
+          ? visible.filter(t => !(t.genres || []).some(g => selectedGenreFilters.has(g)))
+          : visible.filter(t => (t.genres || []).some(g => selectedGenreFilters.has(g)));
+      }
+      for (const t of visible) { if (checked) selectedTrackUris.set(t.uri, { name: t.name, artist: t.artist }); else selectedTrackUris.delete(t.uri); }
+      render();
+    }
+    function clearSelection() { selectedTrackUris.clear(); render(); }
+
+    function selectByPop(direction) {
+      const threshold = parseInt(document.getElementById('popThreshold')?.value || '50', 10);
+      for (const t of tracks) {
+        const pop = t.popularity || 0;
+        if (direction === 'above' ? pop >= threshold : pop < threshold) {
+          selectedTrackUris.set(t.uri, { name: t.name, artist: t.artist });
+        }
+      }
+      render();
+    }
+
+    // Actions
+    async function addToPlaylist() {
+      const targetId = document.getElementById('targetPlaylist').value;
+      if (!targetId) { showToast('Select a target playlist first.', true); return; }
+      if (selectedTrackUris.size === 0) { showToast('No tracks selected.', true); return; }
+      const uris = [...selectedTrackUris.keys()];
+      const targetName = document.getElementById('targetPlaylist').selectedOptions[0]?.text || '';
+      try {
+        const data = await addTracksWithDuplicateCheck(targetId, uris, targetName);
+        if (!data) return;
+        showToast(data.message);
+        clearSelection();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    async function moveToPlaylist() {
+      const targetId = document.getElementById('targetPlaylist').value;
+      if (!targetId) { showToast('Select a target playlist first.', true); return; }
+      if (selectedTrackUris.size === 0) { showToast('No tracks selected.', true); return; }
+      if (targetId === playlistId) { showToast('Target is the same as current playlist.', true); return; }
+      const uris = [...selectedTrackUris.keys()];
+      const trackNames = [...selectedTrackUris.values()].map(t => t.name);
+      const targetName = document.getElementById('targetPlaylist').selectedOptions[0]?.text || '';
+      if (!confirm(`Move ${uris.length} track(s) from "${playlistName}" to "${targetName}"?`)) return;
+      try {
+        const data = await addTracksWithDuplicateCheck(targetId, uris, targetName);
+        if (!data) return;
+        await api(`/api/playlist/${playlistId}/remove-tracks`, { method: 'POST', body: JSON.stringify({ uris, trackNames, playlistName }) });
+        showToast(`Moved ${uris.length} track(s) to "${targetName}".`);
+        clearSelection();
+        await loadTracks();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    async function removeSelected() {
+      if (selectedTrackUris.size === 0) { showToast('No tracks selected.', true); return; }
+      const count = selectedTrackUris.size;
+      if (!confirm(`Remove ${count} track(s) from "${playlistName}"?`)) return;
+      const uris = [...selectedTrackUris.keys()];
+      const trackNames = [...selectedTrackUris.values()].map(t => t.name);
+      try {
+        await api(`/api/playlist/${playlistId}/remove-tracks`, { method: 'POST', body: JSON.stringify({ uris, trackNames, playlistName }) });
+        showToast(`Removed ${count} track(s).`);
+        clearSelection();
+        await loadTracks();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    async function removeSingleTrack(uri, name) {
+      if (!confirm(`Remove "${name}" from this playlist?`)) return;
+      try {
+        await api(`/api/playlist/${playlistId}/remove-tracks`, { method: 'POST', body: JSON.stringify({ uris: [uri], trackNames: [name], playlistName }) });
+        showToast(`Removed "${name}".`);
+        selectedTrackUris.delete(uri);
+        await loadTracks();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    async function serverSort(sortBy) {
+      if (!sortBy) return;
+      showToast(`${sortBy === 'shuffle' ? 'Shuffling' : 'Sorting'} "${playlistName}"...`);
+      try {
+        if (sortBy === 'shuffle') await api(`/api/shuffle/${playlistId}`, { method: 'POST' });
+        else await api(`/api/sort/${playlistId}`, { method: 'POST', body: JSON.stringify({ sortBy }) });
+        showToast('Done!');
+        await loadTracks();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    function renamePlaylist() {
+      const newName = prompt('Rename playlist:', playlistName);
+      if (!newName || !newName.trim()) return;
+      api(`/api/playlist/${playlistId}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName.trim() }) }).then(() => {
+        playlistName = newName.trim();
+        document.title = `${playlistName} — Spotify Playlist Tools`;
+        render();
+        showToast(`Renamed to "${playlistName}".`);
+      }).catch(err => showToast(err.message, true));
+    }
+
+    function deletePlaylist() {
+      if (!confirm(`Delete "${playlistName}"? This cannot be undone.`)) return;
+      api(`/api/playlist/${playlistId}`, { method: 'DELETE' }).then(() => {
+        showToast(`Deleted "${playlistName}".`);
+        window.location.href = '/';
+      }).catch(err => showToast(err.message, true));
+    }
+
+    init();
+  </script>
+</body>
+</html>

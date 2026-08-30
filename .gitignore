@@ -1,0 +1,22 @@
+# Kiro IDE
+.kiro/
+
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+
+# Token & cache data
+data/
+
+# CLI scripts (local tools, not part of the server)
+cli/
+
+# OS files
+.DS_Store
+._*
+Thumbs.db
+
+# npm config
+.npmrc

@@ -1,0 +1,41 @@
+{
+  "name": "spotify-playlists",
+  "version": "1.0.0",
+  "description": "Spotify tools — playlist server/UI and CLI scripts",
+  "main": "scripts/server.js",
+  "scripts": {
+    "help": "node cli/help.js",
+    "start": "node cli/get-playlists.js",
+    "cache": "node scripts/cache-data.js",
+    "cache:update": "node scripts/cache-data.js --update",
+    "cache:force": "node scripts/cache-data.js --force",
+    "duplicates": "node cli/find-duplicates.js",
+    "untiered": "node cli/find-untiered.js",
+    "misplaced": "node cli/gen-misplaced-report.js",
+    "misplaced:fast": "node cli/gen-misplaced-report.js --skip-mb",
+    "remove-dupes": "node cli/remove-duplicates.js",
+    "remove-dupes:execute": "node cli/remove-duplicates.js --execute",
+    "clean-check": "node cli/find-clean-versions.js",
+    "swap-explicit": "node cli/swap-to-explicit.js",
+    "swap-explicit:execute": "node cli/swap-to-explicit.js --execute",
+    "random": "node cli/create-random.js",
+    "billboard": "node cli/billboard-add.js",
+    "billboard:execute": "node cli/billboard-add.js --execute",
+    "artist": "node cli/find-by-artist.js",
+    "artist:execute": "node cli/find-by-artist.js --execute",
+    "stats": "node cli/stats.js",
+    "search": "node cli/search.js",
+    "suggest:love": "node cli/suggest-lovemaking.js",
+    "suggest:love:create": "node cli/suggest-lovemaking.js --create",
+    "suggest:love:xref": "node cli/cross-reference-love.js",
+    "suggest:love:xref:create": "node cli/cross-reference-love.js --append",
+    "playlist": "node cli/manage-playlists.js",
+    "ui": "node scripts/server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "4.22.2"
+  }
+}

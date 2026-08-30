@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spotify Playlist Tools</title>
+  <link rel="stylesheet" href="/shared.css">
+</head>
+<body>
+  <div id="headerContainer"></div>
+
+  <div class="main">
+    <div class="banner banner-error" id="authBanner">
+      <span>Authentication required. Click to log in with Spotify.</span>
+      <button class="btn btn-primary btn-small" onclick="startLogin()">Log In</button>
+    </div>
+
+    <div class="banner banner-warning" id="staleCacheWarning">
+      <span>Cache is more than a day old. Data may be outdated.</span>
+      <button class="btn btn-primary btn-small" onclick="updateCache()">Update Cache</button>
+    </div>
+
+    <div class="action-bar green" id="combineBar" style="display:none;">
+      <span id="combineCount">0 selected</span>
+      <input type="text" id="combineName" placeholder="Playlist name (optional)" style="padding:6px 12px; border:1px solid #333; border-radius:4px; background:#252525; color:#e0e0e0; font-size:13px; width:220px;">
+      <button class="btn btn-primary btn-small" onclick="combineSelected()">Combine & Shuffle</button>
+      <button class="btn btn-secondary btn-small" onclick="scanDuplicates('include')">Scan Selected</button>
+      <button class="btn btn-secondary btn-small" onclick="scanDuplicates('exclude')">Exclude & Scan</button>
+      <button class="btn btn-secondary btn-small" onclick="clearSelection()">Clear</button>
+    </div>
+
+    <div style="margin-bottom: 12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+      <input type="text" id="filterInput" placeholder="Filter playlists..." oninput="renderPlaylists(); syncUrl(400);" style="padding: 8px 14px; border: 1px solid #333; border-radius: 20px; background: #252525; color: #e0e0e0; font-size: 14px; outline: none; width: 300px;">
+      <button class="btn btn-secondary btn-small" onclick="scanDuplicates('exclude')">Scan Dupes</button>
+      <button class="btn btn-secondary btn-small" onclick="showCreatePlaylist()">+ New Playlist</button>
+    </div>
+
+    <div id="playlistContainer">
+      <div class="loading"><span class="spinner"></span> Loading playlists...</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/shared.js"></script>
+  <script>
+    let playlists = [];
+    let scanExclusions = new Set();
+    let selectedIds = new Set();
+    const _p = getUrlParams();
+    let sortField = _p.sort || 'name';
+    let sortDir = _p.dir || 'asc';
+
+    function syncUrl(debounce = 0) {
+      persistParams({
+        filter: document.getElementById('filterInput')?.value || '',
+        sort: sortField !== 'name' ? sortField : '',
+        dir: sortDir !== 'asc' ? sortDir : '',
+      }, { debounce });
+    }
+
+    async function init() {
+      document.getElementById('headerContainer').innerHTML = getHeaderHtml('playlists');
+      const filterEl = document.getElementById('filterInput');
+      if (filterEl && _p.filter) filterEl.value = _p.filter;
+      await checkAuth();
+      await loadPlaylists();
+    }
+
+    async function loadPlaylists() {
+      try {
+        const data = await api('/api/playlists');
+        playlists = data.playlists;
+        scanExclusions = new Set(data.scanExclusions || []);
+        _cacheTimestamp = data.cached_at;
+        updateHeaderAgo();
+        if (_cacheInterval) clearInterval(_cacheInterval);
+        _cacheInterval = setInterval(updateHeaderAgo, 30000);
+        checkCacheAge(data.cached_at);
+        renderPlaylists();
+      } catch (err) {
+        document.getElementById('playlistContainer').innerHTML = `<div class="loading" style="color:#e74c3c">${err.message}</div>`;
+      }
+    }
+
+    function renderPlaylists() {
+      const container = document.getElementById('playlistContainer');
+      if (playlists.length === 0) {
+        container.innerHTML = '<div class="loading">No playlists in cache.</div>';
+        return;
+      }
+
+      const filterText = (document.getElementById('filterInput')?.value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const filtered = filterText
+        ? playlists.filter(p => p.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(filterText))
+        : playlists;
+
+      const sorted = [...filtered].sort((a, b) => {
+        let cmp = 0;
+        if (sortField === 'name') cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        else if (sortField === 'tracks') cmp = a.tracks - b.tracks;
+        else if (sortField === 'duration') cmp = (a.durationMs || 0) - (b.durationMs || 0);
+        else if (sortField === 'lastModified') cmp = (a.lastModified || '').localeCompare(b.lastModified || '');
+        else if (sortField === 'owner') cmp = (a.owner || '').toLowerCase().localeCompare((b.owner || '').toLowerCase());
+        return sortDir === 'asc' ? cmp : -cmp;
+      });
+
+      function sortArrow(field) {
+        if (sortField !== field) return '';
+        return sortDir === 'asc' ? ' &#9650;' : ' &#9660;';
+      }
+
+      const rows = sorted.map(pl => `
+        <tr>
+          <td><input type="checkbox" ${selectedIds.has(pl.id) ? 'checked' : ''} onchange="toggleSelect('${pl.id}')"></td>
+          <td><a href="/playlist/${pl.id}" style="color:#e0e0e0; text-decoration:none;">${escHtml(pl.name)}</a></td>
+          <td style="text-align:center; color:#888">${pl.tracks}</td>
+          <td style="text-align:center; color:#888; font-size:12px">${formatDuration(pl.durationMs)}</td>
+          <td style="color:#888; font-size:12px">${formatDate(pl.lastModified)}</td>
+          <td style="text-align:center">${pl.public ? '<span class="badge badge-public" style="cursor:pointer" title="Click to make private" onclick="toggleVisibility(\''+pl.id+'\', false)">Public</span>' : '<span class="badge badge-private" style="cursor:pointer" title="Click to make public" onclick="toggleVisibility(\''+pl.id+'\', true)">Private</span>'}</td>
+          <td style="text-align:center">${!pl.isOwned ? '' : scanExclusions.has(pl.id) ? '<span class="badge badge-skip" style="cursor:pointer" title="Click to include in scans" onclick="toggleScanExclusion(\''+pl.id+'\', false)">SKIP</span>' : '<span class="badge badge-private" style="cursor:pointer" title="Click to exclude from scans" onclick="toggleScanExclusion(\''+pl.id+'\', true)">Scan</span>'}</td>
+          <td style="text-align:right">
+            <div style="display:flex;gap:4px;justify-content:flex-end;align-items:center;">
+              ${pl.isOwned ? `<select class="sort-select" onchange="sortPlaylist('${pl.id}', this.value); this.selectedIndex=0;">
+                <option value="">Sort...</option>
+                <option value="shuffle">Shuffle</option>
+                <option value="title">By Title</option>
+                <option value="artist">By Artist</option>
+                <option value="date-added">Date Added (new)</option>
+                <option value="date-added-asc">Date Added (old)</option>
+                <option value="release-date">Release Date (old)</option>
+                <option value="release-date-desc">Release Date (new)</option>
+                <option value="popularity">Popularity (high)</option>
+                <option value="popularity-asc">Popularity (low)</option>
+              </select>
+              <button class="btn-icon" title="Rename" onclick="showRename('${pl.id}', '${escAttr(pl.name)}')">&#9998;</button>` : ''}
+              <button class="btn-icon" title="Delete" onclick="showDelete('${pl.id}', '${escAttr(pl.name)}')">&#128465;</button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+
+      container.innerHTML = `
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:40px"><input type="checkbox" onchange="toggleAll(this.checked)"></th>
+              <th class="sortable" onclick="sortTable('name')">Playlist${sortArrow('name')}</th>
+              <th class="sortable" style="text-align:center" onclick="sortTable('tracks')">Tracks${sortArrow('tracks')}</th>
+              <th class="sortable" style="text-align:center" onclick="sortTable('duration')">Duration${sortArrow('duration')}</th>
+              <th class="sortable" onclick="sortTable('lastModified')">Modified${sortArrow('lastModified')}</th>
+              <th style="text-align:center">Vis</th>
+              <th style="text-align:center">Scan</th>
+              <th style="text-align:right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    function sortTable(field) {
+      if (sortField === field) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      else { sortField = field; sortDir = (field === 'tracks' || field === 'duration' || field === 'lastModified') ? 'desc' : 'asc'; }
+      syncUrl();
+      renderPlaylists();
+    }
+
+    // Selection
+    function toggleSelect(id) {
+      if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+      updateCombineBar();
+    }
+    function toggleAll(checked) {
+      const filterText = (document.getElementById('filterInput')?.value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const visible = filterText
+        ? playlists.filter(p => p.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(filterText))
+        : playlists;
+      if (checked) visible.forEach(p => selectedIds.add(p.id)); else selectedIds.clear();
+      updateCombineBar();
+      renderPlaylists();
+    }
+    function clearSelection() { selectedIds.clear(); updateCombineBar(); renderPlaylists(); }
+    function updateCombineBar() {
+      const bar = document.getElementById('combineBar');
+      if (selectedIds.size > 0) { bar.style.display = 'flex'; document.getElementById('combineCount').textContent = `${selectedIds.size} selected`; }
+      else { bar.style.display = 'none'; }
+    }
+
+    // Combine
+    async function combineSelected() {
+      if (selectedIds.size === 0) return;
+      const name = document.getElementById('combineName').value.trim() || undefined;
+      try {
+        showToast('Combining & shuffling...');
+        const data = await api('/api/combine', { method: 'POST', body: JSON.stringify({ playlistIds: [...selectedIds], name }) });
+        showToast(data.message);
+        clearSelection();
+        document.getElementById('combineName').value = '';
+        await loadPlaylists();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    // Sort playlist
+    async function sortPlaylist(id, sortBy) {
+      if (!sortBy) return;
+      const pl = playlists.find(p => p.id === id);
+      showToast(`${sortBy === 'shuffle' ? 'Shuffling' : 'Sorting'} "${pl?.name}"...`);
+      try {
+        if (sortBy === 'shuffle') await api(`/api/shuffle/${id}`, { method: 'POST' });
+        else await api(`/api/sort/${id}`, { method: 'POST', body: JSON.stringify({ sortBy }) });
+        showToast(`Done!`);
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    // Delete
+    function showDelete(id, name) {
+      if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+      api(`/api/playlist/${id}`, { method: 'DELETE' }).then(() => {
+        playlists = playlists.filter(p => p.id !== id);
+        selectedIds.delete(id);
+        renderPlaylists();
+        updateCombineBar();
+        showToast(`Deleted "${name}".`);
+      }).catch(err => showToast(err.message, true));
+    }
+
+    // Rename
+    function showRename(id, currentName) {
+      const newName = prompt('Rename playlist:', currentName);
+      if (!newName || !newName.trim()) return;
+      api(`/api/playlist/${id}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName.trim() }) }).then(() => {
+        const pl = playlists.find(p => p.id === id);
+        if (pl) pl.name = newName.trim();
+        renderPlaylists();
+        showToast(`Renamed to "${newName.trim()}".`);
+      }).catch(err => showToast(err.message, true));
+    }
+
+    // Visibility
+    async function toggleVisibility(id, makePublic) {
+      try {
+        const data = await api(`/api/playlist/${id}/visibility`, { method: 'PUT', body: JSON.stringify({ isPublic: makePublic }) });
+        const pl = playlists.find(p => p.id === id);
+        if (pl) pl.public = makePublic;
+        renderPlaylists();
+        showToast(data.message);
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    // Scan exclusion
+    async function toggleScanExclusion(id, exclude) {
+      try {
+        if (exclude) { await api(`/api/scan-exclusions/${id}`, { method: 'PUT' }); scanExclusions.add(id); }
+        else { await api(`/api/scan-exclusions/${id}`, { method: 'DELETE' }); scanExclusions.delete(id); }
+        renderPlaylists();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    // Scan duplicates — navigates to duplicates page
+    function scanDuplicates(mode) {
+      const ids = [...selectedIds];
+      if (ids.length === 0 && mode === 'include') { showToast('Select playlists to scan.', true); return; }
+      const params = new URLSearchParams({ mode, ids: ids.join(',') });
+      window.location.href = `/duplicates?${params}`;
+    }
+
+    // Create playlist
+    async function showCreatePlaylist() {
+      const name = prompt('New playlist name:');
+      if (!name || !name.trim()) return;
+      try {
+        showToast(`Creating "${name.trim()}"...`);
+        await api('/api/playlist', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+        showToast(`Created "${name.trim()}"!`);
+        await loadPlaylists();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    // Re-render in place after the shared header's Update Cache finishes.
+    window.onCacheUpdated = loadPlaylists;
+
+    init();
+  </script>
+</body>
+</html>

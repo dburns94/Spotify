@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Duplicates — Spotify Playlist Tools</title>
+  <link rel="stylesheet" href="/shared.css">
+</head>
+<body>
+  <div id="headerContainer"></div>
+
+  <div class="main">
+    <div id="content">
+      <div class="loading"><span class="spinner"></span> Scanning for duplicates...</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/shared.js"></script>
+  <script>
+    let playlists = [];
+    let scanMode = 'exclude';
+    let scanIds = [];
+    let selectedRemovals = new Map(); // key -> { playlistId, uri, trackName, playlistName }
+
+    async function init() {
+      document.getElementById('headerContainer').innerHTML = getHeaderHtml('duplicates');
+      const plData = await api('/api/playlists');
+      playlists = plData.playlists;
+      _cacheTimestamp = plData.cached_at;
+      updateHeaderAgo();
+      if (_cacheInterval) clearInterval(_cacheInterval);
+      _cacheInterval = setInterval(updateHeaderAgo, 30000);
+
+      const params = new URLSearchParams(window.location.search);
+      scanMode = params.get('mode') || 'exclude';
+      const idsParam = params.get('ids') || '';
+      scanIds = idsParam ? idsParam.split(',').filter(Boolean) : [...(new Set(plData.scanExclusions || []))];
+
+      await runScan();
+    }
+
+    async function runScan() {
+      const scrollY = window.scrollY;
+      document.getElementById('content').innerHTML = '<div class="loading"><span class="spinner"></span> Scanning for duplicates...</div>';
+      try {
+        const data = await api('/api/duplicates', { method: 'POST', body: JSON.stringify({ playlistIds: scanIds, mode: scanMode }) });
+        renderResults(data);
+        window.scrollTo(0, scrollY);
+      } catch (err) {
+        document.getElementById('content').innerHTML = `<div class="loading" style="color:#e74c3c">${err.message}</div>`;
+      }
+    }
+
+    function toggleRemoval(key, playlistId, uri, trackName, playlistName, checked) {
+      if (checked) {
+        selectedRemovals.set(key, { playlistId, uri, trackName, playlistName });
+      } else {
+        selectedRemovals.delete(key);
+      }
+      updateBatchBar();
+    }
+
+    function updateBatchBar() {
+      const bar = document.getElementById('batchBar');
+      const count = document.getElementById('batchCount');
+      if (selectedRemovals.size > 0) {
+        bar.style.display = 'flex';
+        count.textContent = `${selectedRemovals.size} selected`;
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    function clearBatchSelection() {
+      selectedRemovals.clear();
+      document.querySelectorAll('#content input[type="checkbox"]').forEach(cb => cb.checked = false);
+      updateBatchBar();
+    }
+
+    async function batchRemove() {
+      if (selectedRemovals.size === 0) return;
+      const count = selectedRemovals.size;
+      if (!confirm(`Remove ${count} track(s) from their respective playlists?`)) return;
+
+      showToast(`Removing ${count} track(s)...`);
+
+      // Group by playlist for efficiency
+      const byPlaylist = new Map();
+      for (const item of selectedRemovals.values()) {
+        if (!byPlaylist.has(item.playlistId)) byPlaylist.set(item.playlistId, []);
+        byPlaylist.get(item.playlistId).push(item);
+      }
+
+      try {
+        for (const [playlistId, items] of byPlaylist) {
+          const uris = items.map(i => i.uri);
+          const trackNames = items.map(i => i.trackName);
+          await api(`/api/playlist/${playlistId}/remove-tracks`, {
+            method: 'POST',
+            body: JSON.stringify({ uris, trackNames, playlistName: items[0].playlistName }),
+          });
+        }
+        showToast(`Removed ${count} track(s).`);
+        selectedRemovals.clear();
+        await runScan();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    function renderResults(data) {
+      const totalDupes = data.exactDuplicates.length + data.fuzzyDuplicates.length + data.withinPlaylist.length;
+      const modeLabel = scanMode === 'include'
+        ? `Scanned ${data.scannedPlaylists} selected playlist(s)`
+        : `Scanned ${data.scannedPlaylists} playlist(s) (excluded ${scanIds.length})`;
+
+      let html = `
+        <div style="margin-bottom:16px; display:flex; align-items:center; gap:12px;">
+          <button class="btn btn-secondary btn-small" onclick="history.back()">&#8592; Back</button>
+          <h2 style="color:#1DB954; font-size:18px; margin:0;">Duplicate Finder</h2>
+        </div>
+        <div class="action-bar" id="batchBar" style="display:${selectedRemovals.size > 0 ? 'flex' : 'none'}; margin-bottom:16px;">
+          <span id="batchCount">${selectedRemovals.size} selected</span>
+          <button class="btn btn-danger btn-small" onclick="batchRemove()">Remove Selected</button>
+          <button class="btn btn-secondary btn-small" onclick="clearBatchSelection()">Clear</button>
+        </div>
+        <div style="color:#888; font-size:13px; margin-bottom:16px;">
+          ${modeLabel} | Found: ${data.exactDuplicates.length} exact cross-playlist, ${data.fuzzyDuplicates.length} fuzzy, ${data.withinPlaylist.length} within-playlist
+        </div>
+      `;
+
+      // Within-playlist duplicates
+      if (data.withinPlaylist.length > 0) {
+        const withinRows = data.withinPlaylist.map(d => `
+          <tr>
+            <td><span class="badge" style="background:#e74c3c33;color:#e74c3c;">x${d.count}</span></td>
+            <td>${escHtml(d.name)}</td>
+            <td style="color:#888">${escHtml(d.artist)}</td>
+            <td style="text-align:center; color:#888">${d.popularity || '-'}</td>
+            <td style="color:#888; font-size:12px">${escHtml(d.playlist)}</td>
+            <td><button class="btn btn-danger btn-small" onclick="dedupeWithin('${d.playlistId}', '${d.uri}', '${escAttr(d.name)}', ${d.count})">Keep 1</button></td>
+          </tr>
+        `).join('');
+
+        html += `
+          <details open style="margin-bottom:20px;">
+            <summary style="cursor:pointer; color:#e74c3c; font-size:14px; font-weight:600; padding:8px 0;">
+              Within-Playlist Duplicates (${data.withinPlaylist.length})
+            </summary>
+            <table class="data-table" style="margin-top:8px;">
+              <thead><tr><th style="width:50px">Count</th><th>Song</th><th>Artist</th><th style="text-align:center">Pop</th><th>Playlist</th><th style="width:80px"></th></tr></thead>
+              <tbody>${withinRows}</tbody>
+            </table>
+          </details>
+        `;
+      }
+
+      // Exact duplicates
+      if (data.exactDuplicates.length > 0) {
+        const exactRows = data.exactDuplicates.map((d, di) => {
+          const playlistBtns = d.playlists.map((plName, pi) => {
+            const pl = playlists.find(p => p.name === plName);
+            if (!pl || !pl.isOwned) return `<span style="color:#888; font-size:12px; margin-right:8px;">${escHtml(plName)}</span>`;
+            const key = `exact-${di}-${pi}`;
+            const checked = selectedRemovals.has(key) ? 'checked' : '';
+            return `<span style="font-size:12px; margin-right:12px; display:inline-flex; align-items:center; gap:4px;">
+              <input type="checkbox" ${checked} onchange="toggleRemoval('${key}', '${pl.id}', '${d.uri}', '${escAttr(d.name)}', '${escAttr(plName)}', this.checked)" style="accent-color:#1DB954; width:14px; height:14px;">
+              ${escHtml(plName)}
+              <button class="btn-icon" style="font-size:12px; color:#e74c3c; padding:0 4px;" title="Remove from ${escHtml(plName)}" onclick="removeDupe('${pl.id}', '${d.uri}', '${escAttr(d.name)}', '${escAttr(plName)}')">&#10005;</button>
+            </span>`;
+          }).join('');
+          return `
+          <tr>
+            <td><span class="badge badge-exact">EXACT</span></td>
+            <td>${escHtml(d.name)}</td>
+            <td style="color:#888">${escHtml(d.artist)}</td>
+            <td style="text-align:center; color:#888">${d.popularity || '-'}</td>
+            <td>${playlistBtns}</td>
+          </tr>`;
+        }).join('');
+
+        html += `
+          <details open style="margin-bottom:20px;">
+            <summary style="cursor:pointer; color:#1DB954; font-size:14px; font-weight:600; padding:8px 0;">
+              Exact Duplicates — Cross-Playlist (${data.exactDuplicates.length})
+            </summary>
+            <table class="data-table" style="margin-top:8px;">
+              <thead><tr><th style="width:70px">Match</th><th>Song</th><th>Artist</th><th style="text-align:center">Pop</th><th>In Playlists</th></tr></thead>
+              <tbody>${exactRows}</tbody>
+            </table>
+          </details>
+        `;
+      }
+
+      // Fuzzy duplicates
+      if (data.fuzzyDuplicates.length > 0) {
+        const fuzzyRows = data.fuzzyDuplicates.map((d, di) => {
+          const variantRows = d.variants.map((v, vi) => {
+            const pl = playlists.find(p => p.name === v.playlist);
+            const key = `fuzzy-${di}-${vi}`;
+            const checked = selectedRemovals.has(key) ? 'checked' : '';
+            const removeBtn = (pl && pl.isOwned)
+              ? `<input type="checkbox" ${checked} onchange="toggleRemoval('${key}', '${pl.id}', '${v.uri}', '${escAttr(v.name)}', '${escAttr(v.playlist)}', this.checked)" style="accent-color:#1DB954; width:14px; height:14px; margin-right:4px;">
+                 <button class="btn-icon" style="font-size:12px; color:#e74c3c; padding:0 4px;" onclick="removeDupe('${pl.id}', '${v.uri}', '${escAttr(v.name)}', '${escAttr(v.playlist)}')">&#10005;</button>`
+              : '';
+            return `
+            <div style="margin:2px 0; font-size:12px; display:flex; align-items:center;">
+              ${removeBtn}
+              <span style="color:#e0e0e0">${escHtml(v.name)}</span>
+              <span style="color:#888">&nbsp;— ${escHtml(v.artist)}</span>
+              <span style="color:#666">&nbsp;(pop: ${v.popularity || '-'}) in&nbsp;</span>
+              <span style="color:#888">${escHtml(v.playlist)}</span>
+            </div>`;
+          }).join('');
+          return `
+            <tr>
+              <td><span class="badge badge-fuzzy">FUZZY</span></td>
+              <td colspan="4" style="padding:8px 10px;">${variantRows}</td>
+            </tr>`;
+        }).join('');
+
+        html += `
+          <details open style="margin-bottom:20px;">
+            <summary style="cursor:pointer; color:#f39c12; font-size:14px; font-weight:600; padding:8px 0;">
+              Fuzzy Duplicates — Possible Matches (${data.fuzzyDuplicates.length})
+            </summary>
+            <table class="data-table" style="margin-top:8px;">
+              <thead><tr><th style="width:70px">Match</th><th colspan="4">Variants</th></tr></thead>
+              <tbody>${fuzzyRows}</tbody>
+            </table>
+          </details>
+        `;
+      }
+
+      if (totalDupes === 0) {
+        html += '<p style="color:#888; text-align:center; padding:40px;">No duplicates found. Your library is clean!</p>';
+      }
+
+      document.getElementById('content').innerHTML = html;
+    }
+
+    async function removeDupe(playlistId, uri, trackName, playlistName) {
+      const scrollY = window.scrollY;
+      try {
+        showToast(`Removing "${trackName}" from "${playlistName}"...`);
+        await api(`/api/playlist/${playlistId}/remove-tracks`, { method: 'POST', body: JSON.stringify({ uris: [uri], trackNames: [trackName], playlistName }) });
+        showToast(`Removed "${trackName}" from "${playlistName}".`);
+        await runScan();
+        window.scrollTo(0, scrollY);
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    async function dedupeWithin(playlistId, uri, trackName, count) {
+      const scrollY = window.scrollY;
+      try {
+        showToast(`Removing ${count - 1} duplicate(s) of "${trackName}"...`);
+        await api(`/api/playlist/${playlistId}/remove-tracks`, { method: 'POST', body: JSON.stringify({ uris: [uri], trackNames: [trackName], playlistName: '' }) });
+        await api(`/api/playlist/${playlistId}/add-tracks`, { method: 'POST', body: JSON.stringify({ uris: [uri], skipDuplicates: false }) });
+        showToast(`Kept 1 copy of "${trackName}".`);
+        await runScan();
+        window.scrollTo(0, scrollY);
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    init();
+  </script>
+</body>
+</html>

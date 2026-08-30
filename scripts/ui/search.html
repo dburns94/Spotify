@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Search — Spotify Playlist Tools</title>
+  <link rel="stylesheet" href="/shared.css">
+</head>
+<body>
+  <div id="headerContainer"></div>
+
+  <div class="main">
+    <div style="display:flex; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+      <input type="text" id="librarySearchInput" placeholder="Search your library..." class="search-input" style="width:300px;" oninput="handleLibrarySearch(this.value)">
+      <input type="text" id="spotifySearchInput" placeholder="Search Spotify catalog..." class="search-input" style="width:300px;" oninput="handleSpotifySearch(this.value)">
+      <select id="spotifyResultLimit" class="sort-select" style="width:60px;" onchange="const q = document.getElementById('spotifySearchInput').value; if (q.trim()) handleSpotifySearch(q);">
+        <option value="10">10</option>
+        <option value="20">20</option>
+        <option value="30" selected>30</option>
+        <option value="50">50</option>
+      </select>
+    </div>
+
+    <div class="action-bar" id="addBar" style="display:none;">
+      <select id="targetPlaylist" class="sort-select" style="width:220px; padding:6px 10px; font-size:13px;">
+        <option value="">Select target playlist...</option>
+      </select>
+      <span id="selectedCount">0 track(s) selected</span>
+      <button class="btn btn-primary btn-small" onclick="addSelectedToPlaylist()">Add to Playlist</button>
+      <button class="btn btn-secondary btn-small" onclick="clearSelection()">Clear</button>
+    </div>
+
+    <div id="artistSuggestions" style="margin-bottom:12px; display:flex; gap:8px; flex-wrap:wrap;"></div>
+    <div id="libraryResults"></div>
+    <div id="spotifyResults"></div>
+  </div>
+
+  <!-- Duplicates modal -->
+  <div class="modal-overlay" id="duplicatesModal">
+    <div class="modal">
+      <h3>Duplicates Detected</h3>
+      <p id="duplicatesModalText"></p>
+      <label style="display:inline-flex; align-items:center; gap:6px; margin-bottom:16px; font-size:13px; color:#888; cursor:pointer; line-height:1;">
+        <input type="checkbox" id="duplicatesIncludeCheckbox" style="accent-color:#1DB954; width:14px; height:14px; flex-shrink:0; margin:0;"> Include duplicates anyway
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('duplicatesModal')">Cancel</button>
+        <button class="btn btn-primary" id="duplicatesConfirmBtn">Add Tracks</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/shared.js"></script>
+  <script>
+    let playlists = [];
+    let selectedTrackUris = new Map();
+    let lastLibraryResults = [];
+    let lastSpotifyResults = [];
+    let librarySortField = null;
+    let librarySortDir = 'asc';
+    let spotifySortField = null;
+    let spotifySortDir = 'asc';
+    let librarySearchTimeout = null;
+    let spotifySearchTimeout = null;
+
+    async function init() {
+      document.getElementById('headerContainer').innerHTML = getHeaderHtml('search');
+      const plData = await api('/api/playlists');
+      playlists = plData.playlists;
+      _cacheTimestamp = plData.cached_at;
+      updateHeaderAgo();
+      if (_cacheInterval) clearInterval(_cacheInterval);
+      _cacheInterval = setInterval(updateHeaderAgo, 30000);
+      populateTarget();
+
+      // Restore state from URL params so a reload lands back where you were.
+      const params = new URLSearchParams(window.location.search);
+      const limit = params.get('limit');
+      if (limit && [...document.getElementById('spotifyResultLimit').options].some(o => o.value === limit)) {
+        document.getElementById('spotifyResultLimit').value = limit;
+      }
+      const q = params.get('q');
+      const sq = params.get('sq');
+      if (sq) { document.getElementById('spotifySearchInput').value = sq; handleSpotifySearch(sq); }
+      else if (q) { document.getElementById('librarySearchInput').value = q; handleLibrarySearch(q); }
+    }
+
+    // Write current search state into the URL without reloading or adding history.
+    function syncUrl() {
+      const params = new URLSearchParams();
+      const q = document.getElementById('librarySearchInput').value.trim();
+      const sq = document.getElementById('spotifySearchInput').value.trim();
+      if (q) params.set('q', q);
+      if (sq) {
+        params.set('sq', sq);
+        params.set('limit', document.getElementById('spotifyResultLimit').value);
+      }
+      const qs = params.toString();
+      history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname);
+    }
+
+    function populateTarget() {
+      const select = document.getElementById('targetPlaylist');
+      const owned = playlists.filter(p => p.isOwned !== false).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+      select.innerHTML = '<option value="">Select target playlist...</option>' + owned.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
+    }
+
+    // --- Library search ---
+    function handleLibrarySearch(value) {
+      clearTimeout(librarySearchTimeout);
+      if (!value.trim()) { document.getElementById('libraryResults').innerHTML = ''; document.getElementById('artistSuggestions').innerHTML = ''; syncUrl(); return; }
+      document.getElementById('spotifySearchInput').value = '';
+      document.getElementById('spotifyResults').innerHTML = '';
+      librarySearchTimeout = setTimeout(async () => {
+        syncUrl();
+        try {
+          const [trackData, artistData] = await Promise.all([
+            api(`/api/search?q=${encodeURIComponent(value.trim())}`),
+            api(`/api/artists/search?q=${encodeURIComponent(value.trim())}`),
+          ]);
+          document.getElementById('addBar').style.display = 'flex';
+
+          // Artist suggestions
+          if (artistData.artists.length > 0) {
+            document.getElementById('artistSuggestions').innerHTML = artistData.artists.map(a =>
+              `<a class="artist-chip" href="/artist/${encodeURIComponent(a.name)}">${escHtml(a.name)}<span class="count">(${a.count})</span></a>`
+            ).join('');
+          } else { document.getElementById('artistSuggestions').innerHTML = ''; }
+
+          lastLibraryResults = trackData.results;
+          librarySortField = null;
+          renderLibraryResults();
+        } catch (err) {
+          document.getElementById('libraryResults').innerHTML = `<p style="color:#e74c3c">${err.message}</p>`;
+        }
+      }, 300);
+    }
+
+    function sortLibrary(field) {
+      if (librarySortField === field) librarySortDir = librarySortDir === 'asc' ? 'desc' : 'asc';
+      else { librarySortField = field; librarySortDir = field === 'popularity' ? 'desc' : 'asc'; }
+      renderLibraryResults();
+    }
+
+    function renderLibraryResults() {
+      if (lastLibraryResults.length === 0) { document.getElementById('libraryResults').innerHTML = ''; return; }
+
+      const sorted = [...lastLibraryResults];
+      if (librarySortField) {
+        sorted.sort((a, b) => {
+          let cmp = 0;
+          if (librarySortField === 'name') cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+          else if (librarySortField === 'artist') cmp = a.artist.toLowerCase().localeCompare(b.artist.toLowerCase());
+          else if (librarySortField === 'popularity') cmp = (a.popularity || 0) - (b.popularity || 0);
+          else if (librarySortField === 'playlists') cmp = a.playlists.length - b.playlists.length;
+          return librarySortDir === 'asc' ? cmp : -cmp;
+        });
+      }
+
+      function arrow(field) { return librarySortField === field ? (librarySortDir === 'asc' ? ' &#9650;' : ' &#9660;') : ''; }
+
+      const rows = sorted.map((r, i) => {
+        const checked = selectedTrackUris.has(r.uri) ? 'checked' : '';
+        return `
+        <tr>
+          <td><input type="checkbox" ${checked} onchange="toggleTrack('${r.uri}', '${escAttr(r.name)}', '${escAttr(r.artist)}', this.checked)"></td>
+          <td style="color:#888">${i + 1}</td>
+          <td>${escHtml(r.name)}<button class="queue-btn" onclick="queueTrack('${r.uri}', this)">+ Queue</button></td>
+          <td>${escHtml(r.artist)}</td>
+          <td style="text-align:center; color:#888">${r.popularity || '-'}</td>
+          <td style="color:#888; font-size:12px">${r.playlists.map(escHtml).join(', ')}</td>
+        </tr>`;
+      }).join('');
+
+      document.getElementById('libraryResults').innerHTML = `
+        <h3 style="margin-bottom:8px;">${lastLibraryResults.length} library results</h3>
+        <table class="data-table">
+          <thead><tr>
+            <th style="width:40px"><input type="checkbox" onchange="toggleAllLibrary(this.checked)"></th>
+            <th style="width:40px">#</th>
+            <th class="sortable" onclick="sortLibrary('name')">Title${arrow('name')}</th>
+            <th class="sortable" onclick="sortLibrary('artist')">Artist${arrow('artist')}</th>
+            <th class="sortable" style="text-align:center" onclick="sortLibrary('popularity')">Pop${arrow('popularity')}</th>
+            <th class="sortable" onclick="sortLibrary('playlists')">In Playlists${arrow('playlists')}</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    // --- Spotify catalog search ---
+    function handleSpotifySearch(value) {
+      clearTimeout(spotifySearchTimeout);
+      if (!value.trim()) { document.getElementById('spotifyResults').innerHTML = ''; syncUrl(); return; }
+      document.getElementById('librarySearchInput').value = '';
+      document.getElementById('libraryResults').innerHTML = '';
+      document.getElementById('artistSuggestions').innerHTML = '';
+      spotifySearchTimeout = setTimeout(async () => {
+        syncUrl();
+        document.getElementById('spotifyResults').innerHTML = '<div class="loading"><span class="spinner"></span> Searching Spotify...</div>';
+        document.getElementById('addBar').style.display = 'flex';
+        try {
+          const limit = document.getElementById('spotifyResultLimit').value;
+          const data = await api(`/api/spotify-catalog-search?q=${encodeURIComponent(value.trim())}&limit=${limit}`);
+          if (data.results.length === 0) { document.getElementById('spotifyResults').innerHTML = '<p style="color:#888">No results on Spotify.</p>'; return; }
+          lastSpotifyResults = data.results;
+          spotifySortField = null;
+          renderSpotifyResults();
+        } catch (err) { document.getElementById('spotifyResults').innerHTML = `<p style="color:#e74c3c">${err.message}</p>`; }
+      }, 500);
+    }
+
+    function sortSpotify(field) {
+      if (spotifySortField === field) spotifySortDir = spotifySortDir === 'asc' ? 'desc' : 'asc';
+      else { spotifySortField = field; spotifySortDir = field === 'popularity' ? 'desc' : 'asc'; }
+      renderSpotifyResults();
+    }
+
+    function renderSpotifyResults() {
+      if (lastSpotifyResults.length === 0) { document.getElementById('spotifyResults').innerHTML = ''; return; }
+
+      const sorted = [...lastSpotifyResults];
+      if (spotifySortField) {
+        sorted.sort((a, b) => {
+          let cmp = 0;
+          if (spotifySortField === 'name') cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+          else if (spotifySortField === 'artist') cmp = a.artist.toLowerCase().localeCompare(b.artist.toLowerCase());
+          else if (spotifySortField === 'album') cmp = (a.album || '').toLowerCase().localeCompare((b.album || '').toLowerCase());
+          else if (spotifySortField === 'release_date') cmp = (a.release_date || '').localeCompare(b.release_date || '');
+          else if (spotifySortField === 'popularity') cmp = (a.popularity || 0) - (b.popularity || 0);
+          return spotifySortDir === 'asc' ? cmp : -cmp;
+        });
+      }
+
+      function arrow(field) { return spotifySortField === field ? (spotifySortDir === 'asc' ? ' &#9650;' : ' &#9660;') : ''; }
+
+      const rows = sorted.map((r, i) => {
+        const checked = selectedTrackUris.has(r.uri) ? 'checked' : '';
+        const libraryBadge = r.inLibrary ? `<span class="in-library-badge">In Library</span>` : '';
+        const artistNames = (r.artists && r.artists.length) ? r.artists : (r.artist ? r.artist.split(',').map(s => s.trim()) : []);
+        const artistLink = artistNames.length
+          ? artistNames.map(name => `<a href="/discography/${encodeURIComponent(name)}" title="View ${escAttr(name)}'s discography">${escHtml(name)}</a>`).join(', ')
+          : escHtml(r.artist);
+        return `
+        <tr>
+          <td><input type="checkbox" ${checked} onchange="toggleTrack('${r.uri}', '${escAttr(r.name)}', '${escAttr(r.artist)}', this.checked)"></td>
+          <td style="color:#888">${i + 1}</td>
+          <td>${escHtml(r.name)}${r.explicit ? '<span class="explicit-badge">E</span>' : ''}${libraryBadge}<button class="queue-btn" onclick="queueTrack('${r.uri}', this)">+ Queue</button></td>
+          <td>${artistLink}</td>
+          <td style="color:#888; font-size:12px">${escHtml(r.album || '')}</td>
+          <td style="color:#888; font-size:12px">${r.release_date || '-'}</td>
+          <td style="text-align:center; color:#888">${r.popularity || '-'}</td>
+          <td style="color:#888; font-size:12px">${r.inLibrary ? r.playlists.join(', ') : ''}</td>
+        </tr>`;
+      }).join('');
+
+      document.getElementById('spotifyResults').innerHTML = `
+        <h3 style="margin-bottom:8px;">${lastSpotifyResults.length} Spotify results</h3>
+        <table class="data-table">
+          <thead><tr>
+            <th style="width:40px"><input type="checkbox" onchange="toggleAllSpotify(this.checked)"></th>
+            <th style="width:40px">#</th>
+            <th class="sortable" onclick="sortSpotify('name')">Title${arrow('name')}</th>
+            <th class="sortable" onclick="sortSpotify('artist')">Artist${arrow('artist')}</th>
+            <th class="sortable" onclick="sortSpotify('album')">Album${arrow('album')}</th>
+            <th class="sortable" onclick="sortSpotify('release_date')">Released${arrow('release_date')}</th>
+            <th class="sortable" style="text-align:center" onclick="sortSpotify('popularity')">Pop${arrow('popularity')}</th>
+            <th>In Playlists</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    // --- Track selection ---
+    function toggleTrack(uri, name, artist, checked) {
+      if (checked) selectedTrackUris.set(uri, { name, artist }); else selectedTrackUris.delete(uri);
+      document.getElementById('selectedCount').textContent = `${selectedTrackUris.size} track(s) selected`;
+    }
+    function toggleAllLibrary(checked) {
+      for (const r of lastLibraryResults) { if (checked) selectedTrackUris.set(r.uri, { name: r.name, artist: r.artist }); else selectedTrackUris.delete(r.uri); }
+      renderLibraryResults();
+      document.getElementById('selectedCount').textContent = `${selectedTrackUris.size} track(s) selected`;
+    }
+    function toggleAllSpotify(checked) {
+      for (const r of lastSpotifyResults) { if (checked) selectedTrackUris.set(r.uri, { name: r.name, artist: r.artist }); else selectedTrackUris.delete(r.uri); }
+      renderSpotifyResults();
+      document.getElementById('selectedCount').textContent = `${selectedTrackUris.size} track(s) selected`;
+    }
+    function clearSelection() {
+      selectedTrackUris.clear();
+      document.getElementById('selectedCount').textContent = '0 track(s) selected';
+      renderLibraryResults();
+      renderSpotifyResults();
+    }
+
+    async function addSelectedToPlaylist() {
+      const playlistId = document.getElementById('targetPlaylist').value;
+      if (!playlistId) { showToast('Select a target playlist first.', true); return; }
+      if (selectedTrackUris.size === 0) { showToast('No tracks selected.', true); return; }
+      const uris = [...selectedTrackUris.keys()];
+      const targetName = document.getElementById('targetPlaylist').selectedOptions[0]?.text || '';
+      try {
+        const data = await addTracksWithDuplicateCheck(playlistId, uris, targetName);
+        if (!data) return;
+        showToast(data.message);
+
+        // Update local results to reflect the addition
+        const addedUris = new Set(uris);
+        for (const r of lastSpotifyResults) {
+          if (addedUris.has(r.uri)) {
+            r.inLibrary = true;
+            if (!r.playlists.includes(targetName)) r.playlists.push(targetName);
+          }
+        }
+        for (const r of lastLibraryResults) {
+          if (addedUris.has(r.uri)) {
+            if (!r.playlists.includes(targetName)) r.playlists.push(targetName);
+          }
+        }
+
+        clearSelection();
+        renderSpotifyResults();
+        renderLibraryResults();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    init();
+  </script>
+</body>
+</html>

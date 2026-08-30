@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Billboard — Spotify Playlist Tools</title>
+  <link rel="stylesheet" href="/shared.css">
+</head>
+<body>
+  <div id="headerContainer"></div>
+
+  <div class="main">
+    <h2 style="color:#1DB954; margin-bottom:16px;">Billboard Hot 100 Scoring</h2>
+    <p style="color:#888; font-size:13px; margin-bottom:12px;">Score songs by chart performance. Use a single year for a quick scan, or set a date range for multi-year analysis (e.g. an entire decade).</p>
+    <div class="billboard-controls">
+      <select id="billboardMode" class="sort-select" onchange="toggleBillboardMode()" style="padding:6px 10px;">
+        <option value="year">Single Year</option>
+        <option value="range">Date Range</option>
+      </select>
+      <span id="yearControls">
+        <label style="color:#888; font-size:13px;">Year:</label>
+        <input type="number" id="billboardYear" value="" min="1958" max="2030" style="width:80px;">
+      </span>
+      <span id="rangeControls" style="display:none;">
+        <label style="color:#888; font-size:13px;">From:</label>
+        <select id="billboardFromYear" class="sort-select"><option value="">Year</option></select>
+        <select id="billboardFromMonth" class="sort-select"><option value="">Month</option></select>
+        <label style="color:#888; font-size:13px;">To:</label>
+        <select id="billboardToYear" class="sort-select"><option value="">Year</option></select>
+        <select id="billboardToMonth" class="sort-select"><option value="">Month</option></select>
+      </span>
+      <label style="color:#888; font-size:13px;">Top:</label>
+      <input type="number" id="billboardTop" value="50" min="10" max="200" style="width:60px;">
+      <button class="btn btn-primary btn-small" id="billboardRunBtn" onclick="runBillboard()">Score Charts</button>
+    </div>
+
+    <div class="action-bar" id="billboardAddBar" style="display:none;">
+      <select id="billboardTargetPlaylist" class="sort-select" style="width:220px; padding:6px 10px; font-size:13px;">
+        <option value="">Select target playlist...</option>
+      </select>
+      <span id="billboardSelectedCount">0 selected</span>
+      <button class="btn btn-primary btn-small" onclick="addBillboardToPlaylist()">Search & Add to Playlist</button>
+      <button class="btn btn-secondary btn-small" onclick="clearBillboardSelection()">Clear</button>
+    </div>
+
+    <div id="billboardResults"></div>
+  </div>
+
+  <!-- Duplicates modal -->
+  <div class="modal-overlay" id="duplicatesModal">
+    <div class="modal">
+      <h3>Duplicates Detected</h3>
+      <p id="duplicatesModalText"></p>
+      <label style="display:inline-flex; align-items:center; gap:6px; margin-bottom:16px; font-size:13px; color:#888; cursor:pointer; line-height:1;">
+        <input type="checkbox" id="duplicatesIncludeCheckbox" style="accent-color:#1DB954; width:14px; height:14px; flex-shrink:0; margin:0;"> Include duplicates anyway
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('duplicatesModal')">Cancel</button>
+        <button class="btn btn-primary" id="duplicatesConfirmBtn">Add Tracks</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/shared.js"></script>
+  <script>
+    let playlists = [];
+    let billboardResults = [];
+    let inLibraryResults = [];
+    let selectedBillboard = new Set();
+    let selectedInLibrary = new Set();
+
+    async function init() {
+      document.getElementById('headerContainer').innerHTML = getHeaderHtml('billboard');
+      document.getElementById('billboardYear').value = new Date().getFullYear();
+      populateRangeDropdowns();
+      const plData = await api('/api/playlists');
+      playlists = plData.playlists;
+      _cacheTimestamp = plData.cached_at;
+      updateHeaderAgo();
+      if (_cacheInterval) clearInterval(_cacheInterval);
+      _cacheInterval = setInterval(updateHeaderAgo, 30000);
+
+      // Restore the query controls from the URL and re-run if present.
+      const _p = getUrlParams();
+      if (_p.mode) { document.getElementById('billboardMode').value = _p.mode; toggleBillboardMode(); }
+      if (_p.top) document.getElementById('billboardTop').value = _p.top;
+      if (_p.year) document.getElementById('billboardYear').value = _p.year;
+      if (_p.fromYear) document.getElementById('billboardFromYear').value = _p.fromYear;
+      if (_p.fromMonth) document.getElementById('billboardFromMonth').value = _p.fromMonth;
+      if (_p.toYear) document.getElementById('billboardToYear').value = _p.toYear;
+      if (_p.toMonth) document.getElementById('billboardToMonth').value = _p.toMonth;
+      if (_p.mode || _p.year || _p.fromYear || _p.toYear) runBillboard();
+    }
+
+    function syncBillboardUrl() {
+      const mode = document.getElementById('billboardMode').value;
+      const obj = { mode: mode !== 'year' ? mode : '', top: (document.getElementById('billboardTop').value || '50') !== '50' ? document.getElementById('billboardTop').value : '' };
+      if (mode === 'range') {
+        obj.fromYear = document.getElementById('billboardFromYear').value;
+        obj.fromMonth = document.getElementById('billboardFromMonth').value;
+        obj.toYear = document.getElementById('billboardToYear').value;
+        obj.toMonth = document.getElementById('billboardToMonth').value;
+      } else {
+        obj.year = document.getElementById('billboardYear').value;
+      }
+      persistParams(obj);
+    }
+
+    function populateRangeDropdowns() {
+      const currentYear = new Date().getFullYear();
+      const months = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const yearOptions = '<option value="">Year</option>' + Array.from({length: currentYear - 1958 + 1}, (_, i) => currentYear - i).map(y => `<option value="${y}">${y}</option>`).join('');
+      const monthOptions = '<option value="">Month</option>' + months.slice(1).map((m, i) => `<option value="${String(i + 1).padStart(2, '0')}">${m}</option>`).join('');
+      document.getElementById('billboardFromYear').innerHTML = yearOptions;
+      document.getElementById('billboardFromMonth').innerHTML = monthOptions;
+      document.getElementById('billboardToYear').innerHTML = yearOptions;
+      document.getElementById('billboardToMonth').innerHTML = monthOptions;
+    }
+
+    function toggleBillboardMode() {
+      const mode = document.getElementById('billboardMode').value;
+      document.getElementById('yearControls').style.display = mode === 'year' ? '' : 'none';
+      document.getElementById('rangeControls').style.display = mode === 'range' ? '' : 'none';
+    }
+
+    async function runBillboard() {
+      const mode = document.getElementById('billboardMode').value;
+      const top = document.getElementById('billboardTop').value;
+      const resultsDiv = document.getElementById('billboardResults');
+      const btn = document.getElementById('billboardRunBtn');
+
+      let queryParams = `top=${top}`;
+      if (mode === 'range') {
+        const fromYear = document.getElementById('billboardFromYear').value;
+        const fromMonth = document.getElementById('billboardFromMonth').value;
+        const toYear = document.getElementById('billboardToYear').value;
+        const toMonth = document.getElementById('billboardToMonth').value;
+        const from = fromYear ? `${fromYear}-${fromMonth || '01'}` : '';
+        const to = toYear ? `${toYear}-${toMonth || '12'}` : '';
+        if (from) queryParams += `&from=${from}`;
+        if (to) queryParams += `&to=${to}`;
+        if (!from && !to) { showToast('Select at least a From or To year.', true); btn.disabled = false; btn.textContent = 'Score Charts'; return; }
+      } else {
+        const year = document.getElementById('billboardYear').value || new Date().getFullYear();
+        queryParams += `&year=${year}`;
+      }
+
+      syncBillboardUrl();
+      btn.disabled = true; btn.textContent = 'Scoring...';
+      resultsDiv.innerHTML = '<div class="loading"><span class="spinner"></span> Fetching and scoring charts...</div>';
+      selectedBillboard.clear();
+      updateBillboardCount();
+
+      try {
+        const data = await api(`/api/billboard?${queryParams}`);
+        billboardResults = data.results;
+        inLibraryResults = data.inLibraryResults || [];
+        selectedInLibrary.clear();
+
+        // Populate target playlist dropdown
+        const select = document.getElementById('billboardTargetPlaylist');
+        const ownedPlaylists = playlists.filter(p => p.isOwned !== false).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+        select.innerHTML = '<option value="">Select target playlist...</option>' +
+          ownedPlaylists.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
+
+        document.getElementById('billboardAddBar').style.display = 'flex';
+
+        const info = `<div class="billboard-info">
+          Charts analyzed: ${data.chartsAnalyzed} (${data.dateRange}) |
+          Songs scored: ${data.totalScored} |
+          Already in library: ${data.inLibrary}
+        </div>`;
+
+        if (data.results.length === 0) {
+          resultsDiv.innerHTML = info + '<p style="color:#888">No new songs found. You have them all!</p>';
+          return;
+        }
+
+        const rows = data.results.map((r, i) => `
+          <tr>
+            <td><input type="checkbox" onchange="toggleBillboard(${i}, this.checked)"></td>
+            <td style="color:#888">${r.filterRank}</td>
+            <td style="color:#888">#${r.overallRank}</td>
+            <td style="color:#1DB954; font-weight:600">${r.totalScore}</td>
+            <td>${r.appearances}</td>
+            <td>${escHtml(r.song)}</td>
+            <td style="color:#888">${escHtml(r.artist)}</td>
+          </tr>
+        `).join('');
+
+        let inLibraryHtml = '';
+        if (data.inLibraryResults && data.inLibraryResults.length > 0) {
+          const inLibRows = data.inLibraryResults.map((r, i) => `
+            <tr>
+              <td><input type="checkbox" onchange="toggleInLibrary(${i}, this.checked)"></td>
+              <td style="color:#888">${r.filterRank}</td>
+              <td style="color:#888">#${r.overallRank}</td>
+              <td style="color:#1DB954; font-weight:600">${r.totalScore}</td>
+              <td>${r.appearances}</td>
+              <td>${escHtml(r.song)}</td>
+              <td style="color:#888">${escHtml(r.artist)}</td>
+              <td style="color:#888; font-size:12px">${(r.inPlaylists || []).map(escHtml).join(', ')}</td>
+            </tr>
+          `).join('');
+          inLibraryHtml = `
+          <details style="margin-top:16px;">
+            <summary style="cursor:pointer; color:#888; font-size:13px; padding:8px 0;">Already in library (${data.inLibraryResults.length} songs)</summary>
+            <div class="action-bar" style="margin-top:8px; margin-bottom:8px;">
+              <select id="inLibTargetPlaylist" class="sort-select" style="width:220px; padding:6px 10px; font-size:13px;">
+                <option value="">Select target playlist...</option>
+                ${ownedPlaylists.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('')}
+              </select>
+              <span id="inLibSelectedCount">0 selected</span>
+              <button class="btn btn-primary btn-small" onclick="addInLibraryToPlaylist()">Search & Add to Playlist</button>
+              <button class="btn btn-secondary btn-small" onclick="clearInLibrarySelection()">Clear</button>
+            </div>
+            <table class="data-table" style="margin-top:8px;">
+              <thead><tr><th style="width:40px"><input type="checkbox" onchange="toggleAllInLibrary(this.checked)"></th><th>#</th><th>Rank</th><th>Score</th><th>Wks</th><th>Song</th><th>Artist</th><th>In Playlist</th></tr></thead>
+              <tbody>${inLibRows}</tbody>
+            </table>
+          </details>`;
+        }
+
+        resultsDiv.innerHTML = `
+          ${info}
+          <table class="data-table">
+            <thead><tr>
+              <th style="width:40px"><input type="checkbox" onchange="toggleAllBillboard(this.checked)"></th>
+              <th>#</th><th>Rank</th><th>Score</th><th>Wks</th><th>Song</th><th>Artist</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+          ${inLibraryHtml}
+        `;
+      } catch (err) {
+        resultsDiv.innerHTML = `<div class="loading" style="color:#e74c3c">${err.message}</div>`;
+      } finally { btn.disabled = false; btn.textContent = 'Score Charts'; }
+    }
+
+    function toggleBillboard(idx, checked) { if (checked) selectedBillboard.add(idx); else selectedBillboard.delete(idx); updateBillboardCount(); }
+    function toggleAllBillboard(checked) {
+      if (checked) billboardResults.forEach((_, i) => selectedBillboard.add(i)); else selectedBillboard.clear();
+      document.querySelectorAll('#billboardResults tbody input[type="checkbox"]').forEach((cb, i) => cb.checked = checked);
+      updateBillboardCount();
+    }
+    function clearBillboardSelection() { selectedBillboard.clear(); document.querySelectorAll('#billboardResults input[type="checkbox"]').forEach(cb => cb.checked = false); updateBillboardCount(); }
+    function updateBillboardCount() { document.getElementById('billboardSelectedCount').textContent = `${selectedBillboard.size} selected`; }
+
+    async function addBillboardToPlaylist() {
+      const playlistId = document.getElementById('billboardTargetPlaylist').value;
+      if (!playlistId) { showToast('Select a target playlist first.', true); return; }
+      if (selectedBillboard.size === 0) { showToast('No songs selected.', true); return; }
+
+      const targetName = document.getElementById('billboardTargetPlaylist').selectedOptions[0]?.text || '';
+      const entries = [...selectedBillboard].map(i => billboardResults[i]);
+
+      showToast(`Searching Spotify for ${entries.length} track(s)...`);
+      const uris = [];
+      const notFound = [];
+
+      for (const entry of entries) {
+        try {
+          const data = await api('/api/spotify-search', { method: 'POST', body: JSON.stringify({ song: entry.song, artist: entry.artist }) });
+          if (data.found) uris.push(data.track.uri); else notFound.push(entry.song);
+        } catch { notFound.push(entry.song); }
+      }
+
+      if (uris.length === 0) { showToast('No tracks found on Spotify.', true); return; }
+
+      try {
+        const data = await addTracksWithDuplicateCheck(playlistId, uris, targetName);
+        if (!data) return;
+        let msg = data.message;
+        if (notFound.length > 0) msg += ` ${notFound.length} not found.`;
+        showToast(msg);
+        clearBillboardSelection();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    // In-library selection
+    function toggleInLibrary(idx, checked) { if (checked) selectedInLibrary.add(idx); else selectedInLibrary.delete(idx); updateInLibCount(); }
+    function toggleAllInLibrary(checked) {
+      if (checked) inLibraryResults.forEach((_, i) => selectedInLibrary.add(i)); else selectedInLibrary.clear();
+      document.querySelectorAll('details table tbody input[type="checkbox"]').forEach((cb) => cb.checked = checked);
+      updateInLibCount();
+    }
+    function clearInLibrarySelection() { selectedInLibrary.clear(); document.querySelectorAll('details table tbody input[type="checkbox"]').forEach(cb => cb.checked = false); updateInLibCount(); }
+    function updateInLibCount() { const el = document.getElementById('inLibSelectedCount'); if (el) el.textContent = `${selectedInLibrary.size} selected`; }
+
+    async function addInLibraryToPlaylist() {
+      const playlistId = document.getElementById('inLibTargetPlaylist').value;
+      if (!playlistId) { showToast('Select a target playlist first.', true); return; }
+      if (selectedInLibrary.size === 0) { showToast('No songs selected.', true); return; }
+
+      const targetName = document.getElementById('inLibTargetPlaylist').selectedOptions[0]?.text || '';
+      const entries = [...selectedInLibrary].map(i => inLibraryResults[i]);
+
+      showToast(`Searching Spotify for ${entries.length} track(s)...`);
+      const uris = [];
+      const notFound = [];
+
+      for (const entry of entries) {
+        try {
+          const data = await api('/api/spotify-search', { method: 'POST', body: JSON.stringify({ song: entry.song, artist: entry.artist }) });
+          if (data.found) uris.push(data.track.uri); else notFound.push(entry.song);
+        } catch { notFound.push(entry.song); }
+      }
+
+      if (uris.length === 0) { showToast('No tracks found on Spotify.', true); return; }
+
+      try {
+        const data = await addTracksWithDuplicateCheck(playlistId, uris, targetName);
+        if (!data) return;
+        let msg = data.message;
+        if (notFound.length > 0) msg += ` ${notFound.length} not found.`;
+        showToast(msg);
+        clearInLibrarySelection();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    init();
+  </script>
+</body>
+</html>
