@@ -1553,6 +1553,7 @@ app.get('/api/spotify-discography', async (req, res) => {
               uri: t.uri,
               name: t.name,
               artist: (t.artists || []).map(a => a.name).join(', '),
+              artists: (t.artists || []).map(a => ({ name: a.name, id: a.id })),
               album: albumName,
               album_id: albumId,
               release_date: albumRelease,

@@ -44,15 +44,21 @@ function escAttr(str) {
 // each artist's own library page. Falls back to plain text when no artist.
 // Pass a className (e.g. 'lib-link') to style links that sit outside a table
 // cell, where the .data-table td a styling doesn't reach.
-function libraryArtistLinks(track, className = '') {
+// Pass currentArtist to render that name as plain text instead of a link (used
+// on the artist page so the artist you're already viewing isn't self-linked).
+function libraryArtistLinks(track, className = '', currentArtist = '') {
   const names = (track.artists && track.artists.length)
     ? track.artists.map(a => (typeof a === 'string' ? a : a.name))
     : (track.artist ? track.artist.split(',').map(s => s.trim()) : []);
   if (!names.length) return escHtml(track.artist || '');
   const cls = className ? ` class="${className}"` : '';
+  const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const current = norm(currentArtist);
   return names
     .filter(Boolean)
-    .map(name => `<a${cls} href="/artist/${encodeURIComponent(name)}" title="View ${escAttr(name)} in your library">${escHtml(name)}</a>`)
+    .map(name => (current && norm(name) === current)
+      ? escHtml(name)
+      : `<a${cls} href="/artist/${encodeURIComponent(name)}" title="View ${escAttr(name)} in your library">${escHtml(name)}</a>`)
     .join(', ');
 }
 

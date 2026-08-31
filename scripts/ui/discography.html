@@ -125,6 +125,24 @@
       }
     }
 
+    // Render a track's artist(s). Each collaborator links to their own
+    // discography (passing the Spotify artist id when available so the target
+    // page skips the name-search step). The artist whose page we're already on
+    // renders as plain text, not a link.
+    function artistCell(t) {
+      const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const names = (t.artists && t.artists.length)
+        ? t.artists
+        : (t.artist ? t.artist.split(',').map(s => ({ name: s.trim() })) : []);
+      if (!names.length) return escHtml(t.artist || '');
+      return names.map(a => {
+        const name = a.name;
+        if (norm(name) === norm(resolvedArtist)) return escHtml(name);
+        const idParam = a.id ? `?id=${encodeURIComponent(a.id)}` : '';
+        return `<a href="/discography/${encodeURIComponent(name)}${idParam}" title="View ${escAttr(name)}'s discography">${escHtml(name)}</a>`;
+      }).join(', ');
+    }
+
     function render() {
       const rawFilter = document.getElementById('discogFilterInput')?.value ?? _initialFilter;
       const filterText = rawFilter.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -169,7 +187,7 @@
           <td><input type="checkbox" ${checked} onchange="toggleTrack('${t.uri}', '${escAttr(t.name)}', '${escAttr(t.artist)}', this.checked)"></td>
           <td style="color:#888">${i + 1}</td>
           <td>${escHtml(t.name)}${t.explicit ? '<span class="explicit-badge">E</span>' : ''}${libraryBadge}${dupeCounts.get(t.uri) ? `<span class="version-badge" title="${dupeCounts.get(t.uri)} other version(s) hidden">+${dupeCounts.get(t.uri)}</span>` : ''}<button class="queue-btn" onclick="queueTrack('${t.uri}', this)">+ Queue</button></td>
-          <td style="color:#888; font-size:12px">${escHtml(t.artist)}</td>
+          <td style="color:#888; font-size:12px">${artistCell(t)}</td>
           <td style="color:#888; font-size:12px">${albumLink(t)}</td>
           <td style="text-align:center; color:#888">${formatTrackDuration(t.duration_ms)}</td>
           <td style="text-align:center; color:#888">${t.popularity || '-'}</td>
