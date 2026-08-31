@@ -134,29 +134,38 @@ Key commands:
 
 ## Project Structure
 
+The web server and the CLI are split into two folders. Both share the same
+auth token and playlist cache, which live in the project-root `data/` folder.
+
 ```
 Spotify/
-├── .env                          # Credentials (not committed)
-├── package.json                  # Scripts and dependencies
-├── ignore-playlists-personal.json # Playlists to exclude from duplicate checks
-├── data/
-│   ├── spotify-cache-personal.json  # Cached playlist data
-│   ├── .spotify-token-personal.json # Auth token
-│   ├── artist-genres-cache.json     # Genre data
-│   ├── billboard/                   # Cached Billboard charts
-│   └── ...
-├── reports/
-│   ├── stats-personal.html       # Stats dashboard
-│   ├── duplicates-report.txt     # Duplicate findings
-│   └── ...
-└── scripts/
-    ├── auth.js                   # Shared authentication
-    ├── server.js                 # Web UI server
-    ├── ui/index.html             # Web UI frontend
-    ├── cache-data.js             # Cache builder
-    ├── billboard-add.js          # Billboard scoring
-    ├── find-duplicates.js        # Duplicate finder
-    └── ...
+├── .env                              # Credentials (not committed)
+├── package.json                      # Scripts and dependencies
+├── data/                             # Shared cache + auth (used by UI and CLI)
+│   ├── spotify-cache-personal.json   # Cached playlist data
+│   ├── .spotify-token-personal.json  # Auth token
+│   ├── scan-exclusions-personal.json # Playlists excluded from dupe scans (UI)
+│   ├── delete-log.json               # Log of deleted playlists/tracks
+│   └── billboard/                    # Cached Billboard charts (by year)
+├── scripts/                          # Web UI + shared data tooling
+│   ├── auth.js                       # Shared authentication
+│   ├── cache-data.js                 # Cache builder (npm run cache)
+│   ├── server.js                     # Web UI server (npm run ui)
+│   └── ui/                           # Web UI frontend (per-page HTML)
+└── cli/                              # Command-line tools
+    ├── auth.js                       # CLI authentication helper
+    ├── help.js                       # npm run help
+    ├── find-duplicates.js            # Duplicate finder
+    ├── billboard-add.js              # Billboard scoring
+    ├── ...                           # (search, artist, swap, random, etc.)
+    ├── data/                         # CLI-only caches
+    │   ├── artist-genres-cache.json      # Genre data
+    │   ├── ignore-playlists-personal.json # Playlists excluded from CLI analysis
+    │   └── ...                            # (popularity, clean-check, swapped)
+    └── reports/                      # Generated CLI reports
+        ├── stats-personal.html           # Stats dashboard
+        ├── duplicates-report.txt         # Duplicate findings
+        └── ...
 ```
 
 ## Troubleshooting

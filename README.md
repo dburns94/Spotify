@@ -1,6 +1,11 @@
-# Spotify Playlist Tools — Web UI
+# Spotify Playlist Tools
 
-A local web dashboard for managing Spotify playlists. Browse, search, sort, shuffle, combine, and organize your library through a dark-themed interface.
+A local toolkit for managing Spotify playlists, with two ways to work:
+
+- **Web UI** — a dark-themed dashboard to browse, search, sort, shuffle, combine, and organize your library (`scripts/`).
+- **CLI** — a set of Node.js scripts for batch analysis and playlist edits: duplicate finding, popularity/explicit swaps, Billboard scoring, and more (`cli/`).
+
+Both share the same local cache and auth token. This page documents the Web UI; see the [CLI Commands](#cli-commands) section below and `npm run help` for the CLI.
 
 ## Quick Start
 
@@ -10,6 +15,8 @@ npm run ui
 ```
 
 Opens at [http://localhost:3000](http://localhost:3000). Requires Node.js 18+ and a Spotify Developer App (see SETUP.md for credentials).
+
+The web UI serves on port **3000**. The Spotify OAuth callback uses a separate local port (`http://127.0.0.1:8080/spotify_api`) during login — this is the redirect URI you register in the Spotify Developer Dashboard, not the address you browse to.
 
 ## Pages
 
@@ -152,7 +159,38 @@ Find and remove duplicate tracks across your playlists.
 
 **Cache:** the server maintains a local JSON cache of your playlists and tracks. Individual playlist modifications (add, remove, sort, shuffle, create, rename) automatically refresh that playlist's cache from the Spotify API. Use "Update Cache" for a full sync.
 
+## CLI Commands
+
+The `cli/` scripts share the same cache and token as the web UI. Run `npm run help` for the full, authoritative list with all options. Common commands:
+
+| Command | Description |
+|---------|-------------|
+| `npm run cache` | Smart sync — fetch only playlists that changed |
+| `npm run cache:force` | Full re-fetch of everything |
+| `npm run cache:update -- "Name"` | Refresh one playlist by name |
+| `npm run start` | Quick list of all playlists (no cache needed) |
+| `npm run search -- "query"` | Search your library from the CLI |
+| `npm run duplicates` | Find duplicate tracks across playlists |
+| `npm run untiered` | Find tracks not sorted into a tier playlist |
+| `npm run misplaced` | Find tracks in the wrong year/era playlist |
+| `npm run clean-check` | Find clean tracks that have an explicit version |
+| `npm run popularity` / `:report` | Find highest-popularity version of each song |
+| `npm run remove-dupes` / `:execute` | Dry-run / apply duplicate removal |
+| `npm run swap-explicit` / `:execute` | Dry-run / apply clean→explicit swaps |
+| `npm run swap-popular` / `:execute` | Dry-run / apply highest-popularity swaps |
+| `npm run billboard` / `:execute` | Score Billboard Hot 100, dry-run / add missing |
+| `npm run random` | Combine playlists into a shuffled playlist |
+| `npm run artist -- "Name"` | Find all tracks by an artist |
+| `npm run suggest:love` | Suggest tracks for a lovemaking playlist |
+| `npm run playlist -- <action> "Name"` | Create/rename/delete/shuffle/sort a playlist |
+
+All CLI commands accept `--profile <name>` to target a different account.
+
 ## Data Files
+
+The web UI and CLI share the same cache and token in the project-root `data/` directory. The CLI keeps its own analysis caches and reports under `cli/`.
+
+**Shared (root `data/`):**
 
 | File | Purpose |
 |------|---------|
@@ -161,6 +199,19 @@ Find and remove duplicate tracks across your playlists.
 | `data/scan-exclusions-{profile}.json` | Playlists excluded from duplicate scans |
 | `data/delete-log.json` | Log of deleted playlists/tracks |
 | `data/billboard/` | Cached Billboard Hot 100 chart data (organized by year) |
+
+**CLI-only (`cli/data/` and `cli/reports/`):**
+
+| File | Purpose |
+|------|---------|
+| `cli/data/artist-genres-cache.json` | Artist genre data from Spotify |
+| `cli/data/ignore-playlists-{profile}.json` | Playlists excluded from CLI analysis |
+| `cli/data/clean-check-progress.json` | Progress for the clean/explicit check |
+| `cli/data/explicit-search-cache.json` | Cached explicit-version search results |
+| `cli/data/popularity-search-cache.json` | Cached "most popular version" decisions |
+| `cli/data/popularity-swapped-{profile}.json` | Log of completed popularity swaps |
+| `cli/data/swapped-tracks.json` | Log of completed clean→explicit swaps |
+| `cli/reports/*.txt`, `cli/reports/*.html` | Generated CLI reports |
 
 ## Tech Stack
 
