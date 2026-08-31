@@ -42,27 +42,29 @@ function escAttr(str) {
 // Prefers a structured `artists` array; otherwise splits the comma-joined
 // `artist` string. Each name links individually so collaborations resolve to
 // each artist's own library page. Falls back to plain text when no artist.
-function libraryArtistLinks(track) {
+// Pass a className (e.g. 'lib-link') to style links that sit outside a table
+// cell, where the .data-table td a styling doesn't reach.
+function libraryArtistLinks(track, className = '') {
   const names = (track.artists && track.artists.length)
     ? track.artists.map(a => (typeof a === 'string' ? a : a.name))
     : (track.artist ? track.artist.split(',').map(s => s.trim()) : []);
   if (!names.length) return escHtml(track.artist || '');
+  const cls = className ? ` class="${className}"` : '';
   return names
     .filter(Boolean)
-    .map(name => `<a href="/artist/${encodeURIComponent(name)}" title="View ${escAttr(name)} in your library">${escHtml(name)}</a>`)
+    .map(name => `<a${cls} href="/artist/${encodeURIComponent(name)}" title="View ${escAttr(name)} in your library">${escHtml(name)}</a>`)
     .join(', ');
 }
 
-// Render a track's album as a link to the album's page on Spotify
-// (open.spotify.com/album/:id) when the album id is known, mirroring how
-// artist names link out. Opens in a new tab so it doesn't navigate away from
-// the tool. Falls back to plain album-name text when no album id is present.
+// Render a track's album as a link to its in-app album view (/album/:id) when
+// the album id is known, mirroring how artist names link to their library page.
+// Falls back to plain album-name text when no album id is present.
 function albumLink(track) {
   const name = track.album || '';
   if (!name) return '';
   const id = track.album_id;
   if (!id) return escHtml(name);
-  return `<a href="https://open.spotify.com/album/${encodeURIComponent(id)}" target="_blank" rel="noopener" title="Open album ${escAttr(name)} on Spotify">${escHtml(name)}</a>`;
+  return `<a href="/album/${encodeURIComponent(id)}" title="View album ${escAttr(name)}">${escHtml(name)}</a>`;
 }
 
 // Build a case-insensitive playlist-name -> id lookup from a playlists array

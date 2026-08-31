@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Album — Spotify Playlist Tools</title>
+  <link rel="stylesheet" href="/shared.css">
+</head>
+<body>
+  <div id="headerContainer"></div>
+
+  <div class="main">
+    <div id="content">
+      <div class="loading"><span class="spinner"></span> Loading album from Spotify...</div>
+    </div>
+  </div>
+
+  <!-- Duplicates modal -->
+  <div class="modal-overlay" id="duplicatesModal">
+    <div class="modal">
+      <h3>Duplicates Detected</h3>
+      <p id="duplicatesModalText"></p>
+      <label style="display:inline-flex; align-items:center; gap:6px; margin-bottom:16px; font-size:13px; color:#888; cursor:pointer; line-height:1;">
+        <input type="checkbox" id="duplicatesIncludeCheckbox" style="accent-color:#1DB954; width:14px; height:14px; flex-shrink:0; margin:0;"> Include duplicates anyway
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeModal('duplicatesModal')">Cancel</button>
+        <button class="btn btn-primary" id="duplicatesConfirmBtn">Add Tracks</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/shared.js"></script>
+  <script>
+    const albumId = window.location.pathname.split('/album/')[1];
+    let tracks = [];
+    let playlists = [];
+    let selectedTrackUris = new Map();
+    let albumName = '';
+    let albumArtist = '';
+    let albumRelease = '';
+    let albumImage = '';
+    const _p = getUrlParams();
+    let sortField = _p.sort || 'index';
+    let sortDir = _p.dir || 'asc';
+    const _initialFilter = _p.filter || '';
+
+    function syncUrl(debounce = 0) {
+      persistParams({
+        filter: document.getElementById('albumFilterInput')?.value ?? _initialFilter,
+        sort: sortField !== 'index' ? sortField : '',
+        dir: sortDir !== 'asc' ? sortDir : '',
+      }, { debounce });
+    }
+
+    async function init() {
+      document.getElementById('headerContainer').innerHTML = getHeaderHtml('');
+      const plData = await api('/api/playlists');
+      playlists = plData.playlists;
+      _cacheTimestamp = plData.cached_at;
+      updateHeaderAgo();
+      if (_cacheInterval) clearInterval(_cacheInterval);
+      _cacheInterval = setInterval(updateHeaderAgo, 30000);
+      await loadAlbum();
+    }
+
+    async function loadAlbum() {
+      try {
+        const data = await api(`/api/album/${encodeURIComponent(albumId)}`);
+        tracks = data.tracks.map((t, i) => ({ ...t, _index: t._index ?? i }));
+        albumName = data.name || '';
+        albumArtist = data.artist || '';
+        albumRelease = data.release_date || '';
+        albumImage = data.image || '';
+        document.title = `${albumName} — Spotify Playlist Tools`;
+        render();
+      } catch (err) {
+        document.getElementById('content').innerHTML = `<div class="loading" style="color:#e74c3c">${err.message}</div>`;
+      }
+    }
+
+    function render() {
+      const rawFilter = document.getElementById('albumFilterInput')?.value ?? _initialFilter;
+      const filterText = rawFilter.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const filtered = filterText
+        ? tracks.filter(t => norm(t.name).includes(filterText) || norm(t.artist).includes(filterText))
+        : tracks;
+
+      const sorted = [...filtered].sort((a, b) => {
+        let cmp = 0;
+        if (sortField === 'name') cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        else if (sortField === 'artist') cmp = (a.artist || '').toLowerCase().localeCompare((b.artist || '').toLowerCase());
+        else if (sortField === 'duration_ms') cmp = (a.duration_ms || 0) - (b.duration_ms || 0);
+        else if (sortField === 'popularity') cmp = (a.popularity || 0) - (b.popularity || 0);
+        else if (sortField === 'library') cmp = (a.inLibrary ? 1 : 0) - (b.inLibrary ? 1 : 0);
+        else if (sortField === 'index') cmp = ((a.disc_number || 1) - (b.disc_number || 1)) || ((a.track_number || 0) - (b.track_number || 0)) || ((a._index || 0) - (b._index || 0));
+        return sortDir === 'asc' ? cmp : -cmp;
+      });
+
+      const totalMs = tracks.reduce((s, t) => s + (t.duration_ms || 0), 0);
+      const avgPop = tracks.length > 0 ? Math.round(tracks.reduce((s, t) => s + (t.popularity || 0), 0) / tracks.length) : 0;
+      const inLibraryCount = tracks.filter(t => t.inLibrary).length;
+      const popThresholdVal = document.getElementById('popThreshold')?.value || '50';
+
+      function arrow(field) {
+        if (sortField !== field) return '';
+        return sortDir === 'asc' ? ' &#9650;' : ' &#9660;';
+      }
+
+      const ownedPlaylists = playlists.filter(p => p.isOwned !== false).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+      const targetOptions = ownedPlaylists.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
+      const savedTarget = sessionStorage.getItem('detailTargetPlaylist') || '';
+
+      const rows = sorted.map((t) => {
+        const checked = selectedTrackUris.has(t.uri) ? 'checked' : '';
+        const libraryBadge = t.inLibrary ? `<span class="in-library-badge">In Library</span>` : '';
+        return `
+        <tr>
+          <td><input type="checkbox" ${checked} onchange="toggleTrack('${t.uri}', '${escAttr(t.name)}', '${escAttr(t.artist)}', this.checked)"></td>
+          <td style="color:#888">${t.track_number || ''}</td>
+          <td>${escHtml(t.name)}${t.explicit ? '<span class="explicit-badge">E</span>' : ''}${libraryBadge}<button class="queue-btn" onclick="queueTrack('${t.uri}', this)">+ Queue</button></td>
+          <td style="color:#888; font-size:12px">${libraryArtistLinks(t)}</td>
+          <td style="text-align:center; color:#888">${formatTrackDuration(t.duration_ms)}</td>
+          <td style="text-align:center; color:#888">${t.popularity || '-'}</td>
+          <td style="color:#888; font-size:12px">${t.inLibrary ? playlistLinks(t.playlists) : ''}</td>
+        </tr>`;
+      }).join('');
+
+      const allChecked = sorted.length > 0 && sorted.every(t => selectedTrackUris.has(t.uri));
+
+      document.getElementById('content').innerHTML = `
+        <div style="display:flex; align-items:center; gap:16px; margin-bottom:16px;">
+          <button class="btn btn-secondary btn-small" onclick="history.back()">&#8592; Back</button>
+          ${albumImage ? `<img src="${escAttr(albumImage)}" alt="" style="width:64px; height:64px; border-radius:6px; object-fit:cover;">` : ''}
+          <div style="flex:1;">
+            <h2 style="color:#1DB954; font-size:20px;">${escHtml(albumName)}</h2>
+            <div style="color:#888; font-size:13px; margin-top:2px;">${libraryArtistLinks({ artist: albumArtist }, 'lib-link')}${albumRelease ? ` &middot; ${escHtml(albumRelease)}` : ''}</div>
+          </div>
+        </div>
+        <div class="detail-stats">
+          <div class="detail-stat"><div class="value">${tracks.length}</div><div class="label">Tracks</div></div>
+          <div class="detail-stat"><div class="value">${formatDuration(totalMs)}</div><div class="label">Duration</div></div>
+          <div class="detail-stat"><div class="value">${avgPop}</div><div class="label">Avg Popularity</div></div>
+          <div class="detail-stat"><div class="value">${inLibraryCount}</div><div class="label">In Library</div></div>
+        </div>
+        <input type="text" id="albumFilterInput" placeholder="Filter tracks..." oninput="onFilterInput()" value="${escHtml(rawFilter)}" class="search-input" style="width:300px; margin-bottom:12px;">
+        <div class="action-bar" style="margin-bottom:12px;">
+          <select id="targetPlaylist" class="sort-select" style="width:220px; padding:6px 10px; font-size:13px;" onchange="sessionStorage.setItem('detailTargetPlaylist', this.value)">
+            <option value="">Select target playlist...</option>
+            ${targetOptions}
+          </select>
+          <span id="selectedCount">${selectedTrackUris.size} selected</span>
+          <button class="btn btn-primary btn-small" onclick="addToPlaylist()">Add to Playlist</button>
+          <button class="btn btn-secondary btn-small" onclick="clearSelection()">Clear</button>
+          <button class="btn btn-secondary btn-small" onclick="selectNotInLibrary()">Select not in library</button>
+          <span style="margin-left:12px; display:inline-flex; align-items:center; gap:4px;">
+            <input type="number" id="popThreshold" value="${popThresholdVal}" min="0" max="100" style="width:50px; padding:4px 6px; border:1px solid #333; border-radius:4px; background:#252525; color:#e0e0e0; font-size:12px;">
+            <button class="btn btn-secondary btn-small" onclick="selectByPop('above')">Select above</button>
+            <button class="btn btn-secondary btn-small" onclick="selectByPop('below')">Select below</button>
+          </span>
+        </div>
+        <table class="data-table">
+          <thead><tr>
+            <th style="width:40px"><input type="checkbox" ${allChecked ? 'checked' : ''} onchange="toggleAllTracks(this.checked)"></th>
+            <th style="width:40px; cursor:pointer" onclick="doSort('index')">#${arrow('index')}</th>
+            <th class="sortable" onclick="doSort('name')">Title${arrow('name')}</th>
+            <th class="sortable" onclick="doSort('artist')">Artist${arrow('artist')}</th>
+            <th class="sortable" style="text-align:center" onclick="doSort('duration_ms')">Dur${arrow('duration_ms')}</th>
+            <th class="sortable" style="text-align:center" onclick="doSort('popularity')">Pop${arrow('popularity')}</th>
+            <th class="sortable" onclick="doSort('library')">In Playlists${arrow('library')}</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+
+      if (savedTarget) document.getElementById('targetPlaylist').value = savedTarget;
+      const filterEl = document.getElementById('albumFilterInput');
+      if (filterEl && document.activeElement !== filterEl) { filterEl.focus(); filterEl.setSelectionRange(filterEl.value.length, filterEl.value.length); }
+    }
+
+    function doSort(field) {
+      if (sortField === field) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      else { sortField = field; sortDir = (field === 'duration_ms' || field === 'popularity' || field === 'library') ? 'desc' : 'asc'; }
+      syncUrl();
+      render();
+    }
+
+    function onFilterInput() {
+      render();
+      syncUrl(400);
+    }
+
+    function toggleTrack(uri, name, artist, checked) {
+      if (checked) selectedTrackUris.set(uri, { name, artist }); else selectedTrackUris.delete(uri);
+      const el = document.getElementById('selectedCount');
+      if (el) el.textContent = `${selectedTrackUris.size} selected`;
+    }
+
+    // Tracks currently on screen (respects the filter box).
+    function getVisibleTracks() {
+      const filterText = (document.getElementById('albumFilterInput')?.value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return filterText
+        ? tracks.filter(t => norm(t.name).includes(filterText) || norm(t.artist).includes(filterText))
+        : tracks;
+    }
+
+    function toggleAllTracks(checked) {
+      for (const t of getVisibleTracks()) { if (checked) selectedTrackUris.set(t.uri, { name: t.name, artist: t.artist }); else selectedTrackUris.delete(t.uri); }
+      render();
+    }
+    function clearSelection() { selectedTrackUris.clear(); render(); }
+
+    function selectNotInLibrary() {
+      for (const t of getVisibleTracks()) {
+        if (!t.inLibrary) selectedTrackUris.set(t.uri, { name: t.name, artist: t.artist });
+      }
+      render();
+    }
+
+    function selectByPop(direction) {
+      const threshold = parseInt(document.getElementById('popThreshold')?.value || '50', 10);
+      for (const t of getVisibleTracks()) {
+        const pop = t.popularity || 0;
+        if (direction === 'above' ? pop >= threshold : pop < threshold) {
+          selectedTrackUris.set(t.uri, { name: t.name, artist: t.artist });
+        }
+      }
+      render();
+    }
+
+    async function addToPlaylist() {
+      const targetId = document.getElementById('targetPlaylist').value;
+      if (!targetId) { showToast('Select a target playlist first.', true); return; }
+      if (selectedTrackUris.size === 0) { showToast('No tracks selected.', true); return; }
+      const uris = [...selectedTrackUris.keys()];
+      const targetName = document.getElementById('targetPlaylist').selectedOptions[0]?.text || '';
+      try {
+        const data = await addTracksWithDuplicateCheck(targetId, uris, targetName);
+        if (!data) return;
+        showToast(data.message);
+        const addedUris = new Set(uris);
+        for (const t of tracks) {
+          if (addedUris.has(t.uri)) {
+            t.inLibrary = true;
+            if (!t.playlists.includes(targetName)) t.playlists.push(targetName);
+          }
+        }
+        clearSelection();
+      } catch (err) { showToast(err.message, true); }
+    }
+
+    init();
+  </script>
+</body>
+</html>

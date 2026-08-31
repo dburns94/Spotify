@@ -47,6 +47,7 @@ app.get('/', (req, res) => res.sendFile(path.join(UI_DIR, 'playlists.html')));
 app.get('/playlist/:id', (req, res) => res.sendFile(path.join(UI_DIR, 'playlist.html')));
 app.get('/artist/:name', (req, res) => res.sendFile(path.join(UI_DIR, 'artist.html')));
 app.get('/discography/:name', (req, res) => res.sendFile(path.join(UI_DIR, 'discography.html')));
+app.get('/album/:id', (req, res) => res.sendFile(path.join(UI_DIR, 'album.html')));
 app.get('/artists', (req, res) => res.sendFile(path.join(UI_DIR, 'artists.html')));
 app.get('/genres', (req, res) => res.sendFile(path.join(UI_DIR, 'genres.html')));
 app.get('/genre/:name', (req, res) => res.sendFile(path.join(UI_DIR, 'genre.html')));
@@ -1606,6 +1607,106 @@ app.get('/api/spotify-discography', async (req, res) => {
       found: true,
       genres: artist.genres || [],
       albumCount: albums.length,
+      tracks,
+      total: tracks.length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get a single album's tracks from Spotify (cross-referenced with library)
+app.get('/api/album/:id', async (req, res) => {
+  try {
+    const albumId = req.params.id;
+    if (!albumId) return res.status(400).json({ error: 'album id required' });
+
+    const accessToken = await authenticate();
+
+    // 1. Fetch the album (metadata + first page of simplified track objects).
+    const albRes = await spotifyFetch(`https://api.spotify.com/v1/albums/${albumId}?market=US`, accessToken);
+    if (albRes.status === 404) return res.status(404).json({ error: 'Album not found on Spotify' });
+    if (!albRes.ok) throw new Error(`Failed to fetch album: ${albRes.status}`);
+    const album = await albRes.json();
+
+    const albumName = album.name || '';
+    const albumRelease = album.release_date || '';
+    const albumArtists = (album.artists || []).map(a => a.name).join(', ');
+    const albumImage = album.images?.[0]?.url || '';
+
+    // 2. Collect all track items, paging through if the album has >50 tracks.
+    //    Album track objects are "simplified" and preserve album order.
+    const items = [...(album.tracks?.items || [])];
+    let nextUrl = album.tracks?.next;
+    while (nextUrl) {
+      const pageRes = await spotifyFetch(nextUrl, accessToken);
+      if (!pageRes.ok) throw new Error(`Failed to fetch album tracks: ${pageRes.status}`);
+      const pageData = await pageRes.json();
+      items.push(...(pageData.items || []));
+      nextUrl = pageData.next;
+      if (nextUrl) await sleep(80);
+    }
+
+    const trackMap = new Map(); // trackId -> track
+    items.forEach((t, i) => {
+      if (!t || !t.id || trackMap.has(t.id)) return;
+      trackMap.set(t.id, {
+        id: t.id,
+        uri: t.uri,
+        name: t.name,
+        artist: (t.artists || []).map(a => a.name).join(', '),
+        artists: (t.artists || []).map(a => a.name),
+        album: albumName,
+        album_id: albumId,
+        release_date: albumRelease,
+        duration_ms: t.duration_ms || 0,
+        explicit: t.explicit || false,
+        popularity: 0,
+        disc_number: t.disc_number || 1,
+        track_number: t.track_number || (i + 1),
+        _index: i,
+      });
+    });
+
+    // 3. Simplified album tracks omit popularity; hydrate via the full-track
+    //    endpoint (up to 50 ids per call).
+    const allIds = [...trackMap.keys()];
+    for (let i = 0; i < allIds.length; i += 50) {
+      const idBatch = allIds.slice(i, i + 50);
+      const trRes = await spotifyFetch(`https://api.spotify.com/v1/tracks?ids=${idBatch.join(',')}&market=US`, accessToken);
+      if (!trRes.ok) throw new Error(`Failed to fetch track details: ${trRes.status}`);
+      const trData = await trRes.json();
+      for (const t of trData.tracks || []) {
+        if (t && trackMap.has(t.id)) trackMap.get(t.id).popularity = t.popularity || 0;
+      }
+      if (i + 50 < allIds.length) await sleep(80);
+    }
+
+    // 4. Cross-reference with the local library cache.
+    const cache = loadCache();
+    const libraryIds = new Map(); // trackId -> [playlist names]
+    if (cache) {
+      for (const pl of cache.user_playlists) {
+        for (const track of pl.tracks) {
+          if (!libraryIds.has(track.id)) libraryIds.set(track.id, []);
+          libraryIds.get(track.id).push(pl.name);
+        }
+      }
+    }
+
+    const tracks = [...trackMap.values()].map(t => ({
+      ...t,
+      inLibrary: libraryIds.has(t.id),
+      playlists: [...new Set(libraryIds.get(t.id) || [])],
+    }));
+
+    res.json({
+      id: albumId,
+      name: albumName,
+      artist: albumArtists,
+      release_date: albumRelease,
+      image: albumImage,
+      total_tracks: album.total_tracks || tracks.length,
       tracks,
       total: tracks.length,
     });

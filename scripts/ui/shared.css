@@ -67,6 +67,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .data-table td .queue-btn, .data-table td .btn-icon, .data-table td .btn-small { vertical-align: middle; }
 .data-table td a, .data-table td a:visited { color: inherit; text-decoration: none; border-bottom: 1px dotted #555; }
 .data-table td a:hover { color: #1DB954; border-bottom-color: #1DB954; }
+/* Same look as in-table links, for links that live outside a table cell
+   (e.g. the artist link in the album page header). */
+.lib-link, .lib-link:visited { color: inherit; text-decoration: none; border-bottom: 1px dotted #555; }
+.lib-link:hover { color: #1DB954; border-bottom-color: #1DB954; }
 
 /* Badges */
 .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
