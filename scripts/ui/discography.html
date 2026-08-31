@@ -186,6 +186,7 @@
           <h2 style="color:#1DB954; font-size:20px;">${escHtml(resolvedArtist)} <span style="color:#888; font-size:14px; font-weight:normal;">— Full Discography</span></h2>
           <a class="btn btn-secondary btn-small" href="/artist/${encodeURIComponent(resolvedArtist)}">View library tracks</a>
         </div>
+        ${pageSubhead("This artist's complete Spotify catalog — not just what's in your library.")}
         ${genres.length > 0 ? `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px;">${genres.map(g => `<a href="/genre/${encodeURIComponent(g)}" class="artist-chip">${escHtml(g)}</a>`).join('')}</div>` : ''}
         <div class="detail-stats">
           <div class="detail-stat"><div class="value">${tracks.length}</div><div class="label">Tracks</div></div>

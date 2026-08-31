@@ -131,6 +131,7 @@
           <h2 style="color:#1DB954; font-size:20px;">${escHtml(artistName)}</h2>
           <a class="btn btn-secondary btn-small" href="/discography/${encodeURIComponent(artistName)}">View full discography</a>
         </div>
+        ${pageSubhead('Only tracks by this artist that are in your playlists. See the full discography for everything on Spotify.')}
         ${genres.length > 0 ? `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px;">${genres.map(g => `<a href="/genre/${encodeURIComponent(g)}" class="artist-chip">${escHtml(g)}</a>`).join('')}</div>` : ''}
         <div class="detail-stats">
           <div class="detail-stat"><div class="value">${tracks.length}</div><div class="label">Tracks</div></div>

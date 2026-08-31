@@ -288,6 +288,14 @@ function persistParams(obj, { debounce = 0 } = {}) {
   else write();
 }
 
+// Page subheader — a one-line, muted description shown under a page's h2 title
+// explaining what the page shows. Keeps subhead copy/markup consistent across
+// pages. `text` is treated as plain text and escaped. Returns markup for a
+// full-width row so it drops below titles that live in a flex controls row.
+function pageSubhead(text) {
+  return `<p class="page-subhead" style="width:100%; flex-basis:100%;">${escHtml(text)}</p>`;
+}
+
 // Common header HTML generator
 function getHeaderHtml(activePage) {
   return `

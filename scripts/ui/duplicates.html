@@ -119,6 +119,7 @@
           <button class="btn btn-secondary btn-small" onclick="history.back()">&#8592; Back</button>
           <h2 style="color:#1DB954; font-size:18px; margin:0;">Duplicate Finder</h2>
         </div>
+        ${pageSubhead('Likely duplicate tracks across your playlists, grouped for review.')}
         <div class="action-bar" id="batchBar" style="display:${selectedRemovals.size > 0 ? 'flex' : 'none'}; margin-bottom:16px;">
           <span id="batchCount">${selectedRemovals.size} selected</span>
           <button class="btn btn-danger btn-small" onclick="batchRemove()">Remove Selected</button>
