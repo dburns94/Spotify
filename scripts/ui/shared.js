@@ -37,6 +37,57 @@ function escAttr(str) {
   return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 }
 
+// Render a track's artist(s) as links to their library page (/artist/:name),
+// mirroring how the Spotify catalog search links artists to their discography.
+// Prefers a structured `artists` array; otherwise splits the comma-joined
+// `artist` string. Each name links individually so collaborations resolve to
+// each artist's own library page. Falls back to plain text when no artist.
+function libraryArtistLinks(track) {
+  const names = (track.artists && track.artists.length)
+    ? track.artists.map(a => (typeof a === 'string' ? a : a.name))
+    : (track.artist ? track.artist.split(',').map(s => s.trim()) : []);
+  if (!names.length) return escHtml(track.artist || '');
+  return names
+    .filter(Boolean)
+    .map(name => `<a href="/artist/${encodeURIComponent(name)}" title="View ${escAttr(name)} in your library">${escHtml(name)}</a>`)
+    .join(', ');
+}
+
+// Build a case-insensitive playlist-name -> id lookup from a playlists array
+// (as returned by /api/playlists). Used to turn playlist names shown in
+// "In Playlists" / "Also in" columns into links to /playlist/:id.
+function buildPlaylistNameIndex(playlistList) {
+  const index = new Map();
+  for (const p of (playlistList || [])) {
+    // First occurrence wins; keep the id for each distinct name.
+    if (!index.has(p.name)) index.set(p.name, p.id);
+  }
+  return index;
+}
+
+// Render a list of playlist names as links to their playlist page
+// (/playlist/:id), mirroring how artist names link to their library page.
+// `names` is an array (or comma-joined string) of playlist names. `nameIndex`
+// is a Map from name -> id (see buildPlaylistNameIndex); it falls back to the
+// global `playlists` array when omitted. Names with no known id render as
+// plain text (e.g. a playlist not present in the current list).
+function playlistLinks(names, nameIndex) {
+  const list = Array.isArray(names)
+    ? names
+    : (names ? String(names).split(',').map(s => s.trim()) : []);
+  if (!list.length) return '';
+  const idx = nameIndex
+    || (typeof playlists !== 'undefined' ? buildPlaylistNameIndex(playlists) : new Map());
+  return list
+    .filter(Boolean)
+    .map(name => {
+      const id = idx.get(name);
+      if (!id) return escHtml(name);
+      return `<a href="/playlist/${encodeURIComponent(id)}" title="Open playlist ${escAttr(name)}">${escHtml(name)}</a>`;
+    })
+    .join(', ');
+}
+
 // Formatting helpers
 function formatDuration(ms) {
   if (!ms) return '-';

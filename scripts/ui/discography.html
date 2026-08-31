@@ -174,7 +174,7 @@
           <td style="text-align:center; color:#888">${formatTrackDuration(t.duration_ms)}</td>
           <td style="text-align:center; color:#888">${t.popularity || '-'}</td>
           <td style="color:#888; font-size:12px">${t.release_date || '-'}</td>
-          <td style="color:#888; font-size:12px">${t.inLibrary ? escHtml(t.playlists.join(', ')) : ''}</td>
+          <td style="color:#888; font-size:12px">${t.inLibrary ? playlistLinks(t.playlists) : ''}</td>
         </tr>`;
       }).join('');
 

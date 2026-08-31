@@ -201,7 +201,7 @@
               <td>${r.appearances}</td>
               <td>${escHtml(r.song)}</td>
               <td style="color:#888">${escHtml(r.artist)}</td>
-              <td style="color:#888; font-size:12px">${(r.inPlaylists || []).map(escHtml).join(', ')}</td>
+              <td style="color:#888; font-size:12px">${playlistLinks(r.inPlaylists || [])}</td>
             </tr>
           `).join('');
           inLibraryHtml = `

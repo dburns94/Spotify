@@ -141,13 +141,13 @@
           <td><input type="checkbox" ${checked} onchange="toggleTrack('${t.uri}', '${escAttr(t.name)}', '${escAttr(t.artist)}', this.checked)"></td>
           <td style="color:#888">${i + 1}</td>
           <td>${escHtml(t.name)}${t.explicit ? '<span class="explicit-badge">E</span>' : ''}<button class="queue-btn" onclick="queueTrack('${t.uri}', this)">+ Queue</button></td>
-          <td style="color:#888; font-size:12px">${escHtml(t.artist)}</td>
+          <td style="color:#888; font-size:12px">${libraryArtistLinks(t)}</td>
           <td style="color:#888; font-size:12px">${escHtml(t.album)}</td>
           <td style="text-align:center; color:#888">${formatTrackDuration(t.duration_ms)}</td>
           <td style="text-align:center; color:#888">${t.popularity || '-'}</td>
           <td style="color:#888; font-size:12px">${t.release_date || '-'}</td>
           <td style="color:#888; font-size:12px">${formatDate(t.added_at)}</td>
-          ${showXref ? `<td style="color:#888; font-size:12px">${(t.alsoIn || []).join(', ')}</td>` : ''}
+          ${showXref ? `<td style="color:#888; font-size:12px">${playlistLinks(t.alsoIn || [])}</td>` : ''}
           ${showGenres ? `<td style="font-size:11px">${(t.genres || []).map(g => '<a href="/genre/' + encodeURIComponent(g) + '" class="artist-chip" style="font-size:10px;padding:1px 6px;">' + escHtml(g) + '</a>').join(' ')}</td>` : ''}
           <td>${isOwned ? `<button class="btn-icon" title="Remove" onclick="removeSingleTrack('${t.uri}', '${escAttr(t.name)}')">&#128465;</button>` : ''}</td>
         </tr>`;

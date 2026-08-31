@@ -168,9 +168,9 @@
           <td><input type="checkbox" ${checked} onchange="toggleTrack('${r.uri}', '${escAttr(r.name)}', '${escAttr(r.artist)}', this.checked)"></td>
           <td style="color:#888">${i + 1}</td>
           <td>${escHtml(r.name)}<button class="queue-btn" onclick="queueTrack('${r.uri}', this)">+ Queue</button></td>
-          <td>${escHtml(r.artist)}</td>
+          <td>${libraryArtistLinks(r)}</td>
           <td style="text-align:center; color:#888">${r.popularity || '-'}</td>
-          <td style="color:#888; font-size:12px">${r.playlists.map(escHtml).join(', ')}</td>
+          <td style="color:#888; font-size:12px">${playlistLinks(r.playlists)}</td>
         </tr>`;
       }).join('');
 
@@ -251,7 +251,7 @@
           <td style="color:#888; font-size:12px">${escHtml(r.album || '')}</td>
           <td style="color:#888; font-size:12px">${r.release_date || '-'}</td>
           <td style="text-align:center; color:#888">${r.popularity || '-'}</td>
-          <td style="color:#888; font-size:12px">${r.inLibrary ? r.playlists.join(', ') : ''}</td>
+          <td style="color:#888; font-size:12px">${r.inLibrary ? playlistLinks(r.playlists) : ''}</td>
         </tr>`;
       }).join('');
 
