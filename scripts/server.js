@@ -1472,6 +1472,7 @@ app.get('/api/spotify-catalog-search', async (req, res) => {
       artist: t.artists.map(a => a.name).join(', '),
       artists: t.artists.map(a => a.name),
       album: t.album?.name || '',
+      album_id: t.album?.id || '',
       release_date: t.album?.release_date || '',
       explicit: t.explicit,
       popularity: t.popularity,
@@ -1540,6 +1541,7 @@ app.get('/api/spotify-discography', async (req, res) => {
         if (!alb) continue;
         const albumRelease = alb.release_date || '';
         const albumName = alb.name || '';
+        const albumId = alb.id || '';
         for (const t of alb.tracks?.items || []) {
           // Only keep tracks where this artist actually appears.
           const onTrack = (t.artists || []).some(a => a.id === artist.id);
@@ -1551,6 +1553,7 @@ app.get('/api/spotify-discography', async (req, res) => {
               name: t.name,
               artist: (t.artists || []).map(a => a.name).join(', '),
               album: albumName,
+              album_id: albumId,
               release_date: albumRelease,
               duration_ms: t.duration_ms || 0,
               explicit: t.explicit || false,

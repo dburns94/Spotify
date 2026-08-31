@@ -53,6 +53,18 @@ function libraryArtistLinks(track) {
     .join(', ');
 }
 
+// Render a track's album as a link to the album's page on Spotify
+// (open.spotify.com/album/:id) when the album id is known, mirroring how
+// artist names link out. Opens in a new tab so it doesn't navigate away from
+// the tool. Falls back to plain album-name text when no album id is present.
+function albumLink(track) {
+  const name = track.album || '';
+  if (!name) return '';
+  const id = track.album_id;
+  if (!id) return escHtml(name);
+  return `<a href="https://open.spotify.com/album/${encodeURIComponent(id)}" target="_blank" rel="noopener" title="Open album ${escAttr(name)} on Spotify">${escHtml(name)}</a>`;
+}
+
 // Build a case-insensitive playlist-name -> id lookup from a playlists array
 // (as returned by /api/playlists). Used to turn playlist names shown in
 // "In Playlists" / "Also in" columns into links to /playlist/:id.

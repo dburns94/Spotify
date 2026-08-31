@@ -248,7 +248,7 @@
           <td style="color:#888">${i + 1}</td>
           <td>${escHtml(r.name)}${r.explicit ? '<span class="explicit-badge">E</span>' : ''}${libraryBadge}<button class="queue-btn" onclick="queueTrack('${r.uri}', this)">+ Queue</button></td>
           <td>${artistLink}</td>
-          <td style="color:#888; font-size:12px">${escHtml(r.album || '')}</td>
+          <td style="color:#888; font-size:12px">${albumLink(r)}</td>
           <td style="color:#888; font-size:12px">${r.release_date || '-'}</td>
           <td style="text-align:center; color:#888">${r.popularity || '-'}</td>
           <td style="color:#888; font-size:12px">${r.inLibrary ? playlistLinks(r.playlists) : ''}</td>

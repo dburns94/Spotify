@@ -170,7 +170,7 @@
           <td style="color:#888">${i + 1}</td>
           <td>${escHtml(t.name)}${t.explicit ? '<span class="explicit-badge">E</span>' : ''}${libraryBadge}${dupeCounts.get(t.uri) ? `<span class="version-badge" title="${dupeCounts.get(t.uri)} other version(s) hidden">+${dupeCounts.get(t.uri)}</span>` : ''}<button class="queue-btn" onclick="queueTrack('${t.uri}', this)">+ Queue</button></td>
           <td style="color:#888; font-size:12px">${escHtml(t.artist)}</td>
-          <td style="color:#888; font-size:12px">${escHtml(t.album || '')}</td>
+          <td style="color:#888; font-size:12px">${albumLink(t)}</td>
           <td style="text-align:center; color:#888">${formatTrackDuration(t.duration_ms)}</td>
           <td style="text-align:center; color:#888">${t.popularity || '-'}</td>
           <td style="color:#888; font-size:12px">${t.release_date || '-'}</td>
