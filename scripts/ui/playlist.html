@@ -39,8 +39,8 @@
     let playlists = [];
     let isOwned = true;
     const _p = getUrlParams();
-    let sortField = _p.sort || 'added_at';
-    let sortDir = _p.dir || 'desc';
+    let sortField = _p.sort || 'index';
+    let sortDir = _p.dir || 'asc';
     let selectedTrackUris = new Map();
     let playlistName = '';
     let showXref = _p.xref === '1';
@@ -53,8 +53,8 @@
     function syncUrl(debounce = 0) {
       persistParams({
         filter: document.getElementById('detailFilterInput')?.value ?? _initialFilter,
-        sort: sortField !== 'added_at' ? sortField : '',
-        dir: sortDir !== 'desc' ? sortDir : '',
+        sort: sortField !== 'index' ? sortField : '',
+        dir: sortDir !== 'asc' ? sortDir : '',
         xref: showXref ? '1' : '',
         genres: showGenres ? '1' : '',
         gf: showGenres ? [...selectedGenreFilters] : [],
